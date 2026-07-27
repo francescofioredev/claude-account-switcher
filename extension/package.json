@@ -1,0 +1,43 @@
+{
+  "name": "claude-account-switcher",
+  "displayName": "Claude Account Switcher",
+  "description": "Mostra e cambia l'account Claude Code usato in questa finestra, come il branch git.",
+  "version": "0.1.0",
+  "publisher": "francescofioredev",
+  "license": "MIT",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": ["Other"],
+  "main": "./extension.js",
+  "activationEvents": ["onStartupFinished"],
+  "contributes": {
+    "commands": [
+      {
+        "command": "claudeAccount.switch",
+        "title": "Claude Account: Cambia account per questo progetto"
+      },
+      {
+        "command": "claudeAccount.refresh",
+        "title": "Claude Account: Aggiorna"
+      }
+    ],
+    "configuration": {
+      "title": "Claude Account Switcher",
+      "properties": {
+        "claudeAccount.cliPath": {
+          "type": "string",
+          "default": "",
+          "scope": "machine",
+          "description": "Percorso dell'eseguibile claude-account. Se vuoto prova ~/.local/bin/claude-account e poi il PATH. Serve perché VS Code lanciato dal Dock ha un PATH ridotto."
+        },
+        "claudeAccount.statusBarPriority": {
+          "type": "number",
+          "default": 99,
+          "scope": "machine",
+          "description": "Priorità dell'elemento nella status bar. Più alto = più a sinistra."
+        }
+      }
+    }
+  }
+}

@@ -129,20 +129,29 @@ cmd_status() {
   printf 'email=%s\n' "$(email_of "$ACCOUNT")"
 }
 
+# list           tabella leggibile
+# list --porcelain   <nome>TAB<email>TAB<config_dir>TAB<json>, per l'estensione:
+#                    così sapere dove vive ogni .claude.json resta compito di
+#                    questo script soltanto
 cmd_list() {
-  _row default
+  fmt=${1:-human}
+  _row default "$fmt"
   if [ -d "$ACCOUNTS" ]; then
     for d in "$ACCOUNTS"/*; do
       [ -d "$d" ] || continue
-      _row "$(basename "$d")"
+      _row "$(basename "$d")" "$fmt"
     done
   fi
 }
 
 _row() {
   email=$(email_of "$1")
-  [ -n "$email" ] || email="(mai loggato)"
-  printf '%-14s %-38s %s\n' "$1" "$email" "$(dir_of "$1")"
+  if [ "${2:-human}" = "--porcelain" ]; then
+    printf '%s\t%s\t%s\t%s\n' "$1" "$email" "$(dir_of "$1")" "$(json_of "$1")"
+  else
+    [ -n "$email" ] || email="(mai loggato)"
+    printf '%-14s %-38s %s\n' "$1" "$email" "$(dir_of "$1")"
+  fi
 }
 
 cmd_new() {

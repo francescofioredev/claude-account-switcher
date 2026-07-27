@@ -94,9 +94,18 @@ In `extension/`. Mostra l'account attivo nella status bar e permette di cambiarl
 dice anche **perché** quell'account è attivo (override, marker file, tabella o default).
 
 ```sh
-cd extension && npx @vscode/vsce package
+cd extension
+npx @vscode/vsce package --allow-missing-repository --skip-license
 code --install-extension claude-account-switcher-*.vsix
 ```
+
+L'estensione non duplica la logica di risoluzione: interroga `claude-account`, la stessa CLI che consulta il
+wrapper. Se non la trova, lo dice nel tooltip e Claude Code continua a funzionare sull'account di default.
+
+| Setting | Default | A cosa serve |
+|---|---|---|
+| `claudeAccount.cliPath` | vuoto | Percorso di `claude-account`. Vuoto = prova `~/.local/bin/claude-account`, poi il PATH. Serve perché VS Code lanciato dal Dock ha un PATH ridotto. |
+| `claudeAccount.statusBarPriority` | `99` | Posizione nella status bar: più alto, più a sinistra. |
 
 ## Da sapere
 
