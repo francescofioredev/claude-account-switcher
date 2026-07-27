@@ -1,0 +1,203 @@
+#!/bin/sh
+# claude-account — seleziona l'account Claude Code in base al progetto.
+#
+# Claude Code tiene un solo login per macchina, ma isola credenziali e stato per
+# CLAUDE_CONFIG_DIR: su macOS il servizio Keychain è "Claude Code-credentials"
+# quando la variabile non è settata, e "Claude Code-credentials-<sha256(dir)[0:8]>"
+# quando lo è. Più account possono quindi restare loggati insieme.
+#
+# Questo script è l'unica fonte di verità su "quale account per quale progetto".
+# Lo consultano il wrapper di VS Code, l'hook della shell e l'estensione.
+#
+# set -u sì, set -e MAI: questo script sta sul percorso di avvio di Claude, un
+# errore qui deve degradare all'account di default, non impedire l'avvio.
+
+set -u
+
+ACCOUNTS="$HOME/.claude-accounts"
+DEFAULT_DIR="$HOME/.claude"
+CONF="${XDG_CONFIG_HOME:-$HOME/.config}/claude-account"
+ACCOUNTS_FILE="$CONF/accounts"
+OVERRIDES="$CONF/overrides"
+
+# File e cartelle di ~/.claude condivisi con ogni nuovo slot via symlink.
+# Fuori da qui resta tutto ciò che è specifico dell'account o volatile:
+# .claude.json, ide/, sessions/, session-env/, shell-snapshots/, file-history/,
+# history.jsonl, backups/, cache/, telemetry/.
+SHARED="CLAUDE.md settings.json settings.local.json skills agents commands plugins hooks get-shit-done gsd-file-manifest.json projects"
+
+ACCOUNT=default
+RESOLVED=
+SOURCE=default
+
+die() { printf '%s\n' "$*" >&2; exit 1; }
+
+# Legge un file di una riga togliendo spazi e newline.
+read1() { tr -d ' \t\n\r' < "$1"; }
+
+# Stessa canonicalizzazione che l'estensione VS Code ottiene con realpathSync():
+# senza, lo slug scritto qui non combacerebbe con quello cercato da lei.
+abspath() {
+  if [ -d "$1" ]; then
+    (cd "$1" 2>/dev/null && pwd -P) || printf '%s' "$1"
+  else
+    printf '%s' "$1"
+  fi
+}
+
+slug_of() { printf '%s' "$1" | tr '/' '-'; }
+
+# Accetta un nome di account. 'default' è riservato e vale ~/.claude: serve per
+# poter forzare esplicitamente il default contro quanto dice la tabella.
+# Un nome che non corrisponde a nessuno slot fallisce e lascia proseguire la
+# risoluzione al livello successivo, invece di puntare a uno slot fantasma.
+try() {
+  [ -n "${1:-}" ] || return 1
+  case "$1" in .*|*/*) return 1 ;; esac
+  if [ "$1" = default ]; then
+    ACCOUNT=default; RESOLVED=; SOURCE=$2; return 0
+  fi
+  [ -d "$ACCOUNTS/$1" ] || return 1
+  ACCOUNT=$1; RESOLVED="$ACCOUNTS/$1"; SOURCE=$2; return 0
+}
+
+# Precedenza: override della UI > marker file nel repo > tabella > default.
+resolve() {
+  d=$(abspath "${1:-$PWD}")
+
+  ov="$OVERRIDES/$(slug_of "$d")"
+  [ -f "$ov" ] && try "$(read1 "$ov")" override && return 0
+
+  p=$d
+  while [ -n "$p" ] && [ "$p" != "/" ]; do
+    if [ -f "$p/.claude-account" ]; then
+      try "$(read1 "$p/.claude-account")" marker && return 0
+      break
+    fi
+    p=$(dirname "$p")
+  done
+
+  if [ -f "$ACCOUNTS_FILE" ]; then
+    while read -r name prefix _; do
+      case "$name" in ''|\#*) continue ;; esac
+      [ -n "${prefix:-}" ] || continue
+      case "$prefix" in "~"*) prefix="$HOME${prefix#\~}" ;; esac
+      # anche il prefisso va canonicalizzato: $d lo è già, e un symlink lungo il
+      # path (su macOS basta /var → /private/var) impedirebbe il match, in silenzio
+      prefix=$(abspath "$prefix")
+      case "$d" in "$prefix"|"$prefix"/*) try "$name" table && return 0 ;; esac
+    done < "$ACCOUNTS_FILE"
+  fi
+
+  ACCOUNT=default; RESOLVED=; SOURCE=default
+  return 0
+}
+
+# La config dir di un account, incluso il default.
+dir_of() {
+  if [ "$1" = default ]; then printf '%s' "$DEFAULT_DIR"; else printf '%s' "$ACCOUNTS/$1"; fi
+}
+
+# L'email loggata in uno slot, letta da .claude.json (nessuno spawn di processo).
+# Vuota se lo slot non ha mai fatto login.
+email_of() {
+  f="$1/.claude.json"
+  [ -f "$f" ] || return 0
+  sed -n 's/.*"emailAddress"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$f" | head -1
+}
+
+cmd_resolve() {
+  resolve "${1:-}"
+  [ -n "$RESOLVED" ] && printf '%s\n' "$RESOLVED"
+  return 0
+}
+
+cmd_status() {
+  resolve "${1:-}"
+  cfg=$(dir_of "$ACCOUNT")
+  printf 'account=%s\n' "$ACCOUNT"
+  printf 'config_dir=%s\n' "$cfg"
+  printf 'source=%s\n' "$SOURCE"
+  printf 'path=%s\n' "$(abspath "${1:-$PWD}")"
+  printf 'email=%s\n' "$(email_of "$cfg")"
+}
+
+cmd_list() {
+  _row default "$DEFAULT_DIR"
+  if [ -d "$ACCOUNTS" ]; then
+    for d in "$ACCOUNTS"/*; do
+      [ -d "$d" ] || continue
+      _row "$(basename "$d")" "$d"
+    done
+  fi
+}
+
+_row() {
+  email=$(email_of "$2")
+  [ -n "$email" ] || email="(mai loggato)"
+  printf '%-14s %-38s %s\n' "$1" "$email" "$2"
+}
+
+cmd_new() {
+  name=${1:-}
+  [ -n "$name" ] || die "uso: claude-account new <nome>"
+  case "$name" in default) die "'default' è riservato: è l'account in $DEFAULT_DIR" ;; esac
+  case "$name" in .*|*/*) die "nome non valido: $name" ;; esac
+  [ -d "$DEFAULT_DIR" ] || die "non trovo $DEFAULT_DIR: Claude Code non è mai stato avviato?"
+
+  dst="$ACCOUNTS/$name"
+  mkdir -p "$dst" || die "non riesco a creare $dst"
+  for f in $SHARED; do
+    [ -e "$DEFAULT_DIR/$f" ] || continue
+    [ -e "$dst/$f" ] || [ -L "$dst/$f" ] || ln -s "$DEFAULT_DIR/$f" "$dst/$f"
+  done
+
+  printf 'creato %s (config condivisa con %s via symlink)\n' "$dst" "$DEFAULT_DIR"
+  printf 'ora fai il login:\n  CLAUDE_CONFIG_DIR=%s claude auth login\n' "$dst"
+}
+
+cmd_use() {
+  name=${1:-}
+  [ -n "$name" ] || die "uso: claude-account use <nome|default> [path]"
+  [ "$name" = default ] || [ -d "$ACCOUNTS/$name" ] || die "slot inesistente: $name (vedi: claude-account list)"
+  d=$(abspath "${2:-$PWD}")
+  mkdir -p "$OVERRIDES" || die "non riesco a creare $OVERRIDES"
+  printf '%s\n' "$name" > "$OVERRIDES/$(slug_of "$d")"
+  printf '%s → %s\n' "$d" "$name"
+}
+
+cmd_clear() {
+  d=$(abspath "${1:-$PWD}")
+  rm -f "$OVERRIDES/$(slug_of "$d")"
+  printf '%s → default del progetto\n' "$d"
+}
+
+cmd_help() {
+  cat <<EOF
+claude-account — un account Claude Code per progetto
+
+  resolve [path]        stampa la config dir da usare (vuoto = account di default)
+  status  [path]        account / config_dir / source / path / email
+  list                  gli account disponibili e chi è loggato in ognuno
+  new <nome>            crea lo slot ~/.claude-accounts/<nome>
+  use <nome|default> [path]   forza un account su quel progetto
+  clear [path]          rimuove il forzamento, torna al default del progetto
+
+Precedenza: override (use) > file .claude-account nel repo > $ACCOUNTS_FILE > default.
+EOF
+}
+
+if [ $# -eq 0 ]; then set -- help; fi
+cmd=$1
+shift
+
+case "$cmd" in
+  resolve)       cmd_resolve "$@" ;;
+  status)        cmd_status  "$@" ;;
+  list)          cmd_list    "$@" ;;
+  new)           cmd_new     "$@" ;;
+  use)           cmd_use     "$@" ;;
+  clear)         cmd_clear   "$@" ;;
+  help|-h|--help) cmd_help ;;
+  *)             die "comando sconosciuto: $cmd (prova: claude-account help)" ;;
+esac

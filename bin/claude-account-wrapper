@@ -1,0 +1,26 @@
+#!/bin/sh
+# Wrapper per il setting VS Code "claudeCode.claudeProcessWrapper".
+#
+# L'estensione Claude Code lo invoca come:  claude-account-wrapper <binario-claude> <args...>
+# quindi qui basta impostare l'ambiente e fare exec di quello che ci è stato passato.
+#
+# Il cwd con cui l'estensione ci lancia è realpathSync(workspaceFolders[0]),
+# cioè la PRIMA cartella del .code-workspace nei workspace multi-root.
+#
+# Due regole non negoziabili:
+#  - nel ramo default CLAUDE_CONFIG_DIR va tolta dall'ambiente, non impostata al
+#    suo valore di default: settarla cambierebbe il namespace del Keychain e
+#    l'account di default risulterebbe sloggato;
+#  - nessun set -e e nessun errore fatale: se claude-account manca o è rotto,
+#    Claude deve comunque partire sull'account di default.
+
+dir=$("$(dirname "$0")/claude-account" resolve "$PWD" 2>/dev/null) || dir=
+
+if [ -n "$dir" ]; then
+  CLAUDE_CONFIG_DIR="$dir"
+  export CLAUDE_CONFIG_DIR
+else
+  unset CLAUDE_CONFIG_DIR
+fi
+
+exec "$@"

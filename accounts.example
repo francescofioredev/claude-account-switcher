@@ -1,0 +1,14 @@
+# claude-account — mappatura progetto → account
+#
+# Una riga per regola:   <account>   <prefisso di path>
+# Vince il primo match: scrivi dal più specifico al più generico.
+# '~' viene espanso. <account> corrisponde a ~/.claude-accounts/<account>,
+# tranne il nome riservato 'default' che vale ~/.claude.
+#
+# Un account che non esiste ancora viene ignorato, e la risoluzione prosegue:
+# così una riga scritta in anticipo non rompe nulla.
+#
+# Esempi:
+# lavoro    ~/Coding/acme
+# perso     ~/Coding/side-projects
+# default   ~/Coding/acme/open-source     # sottocartella che torna all'account di default
