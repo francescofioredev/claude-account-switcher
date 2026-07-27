@@ -98,10 +98,17 @@ dir_of() {
   if [ "$1" = default ]; then printf '%s' "$DEFAULT_DIR"; else printf '%s' "$ACCOUNTS/$1"; fi
 }
 
-# L'email loggata in uno slot, letta da .claude.json (nessuno spawn di processo).
-# Vuota se lo slot non ha mai fatto login.
+# Dove sta il .claude.json di un account. Attenzione all'asimmetria: per
+# l'account di default vive ACCANTO alla config dir (~/.claude.json), mentre con
+# CLAUDE_CONFIG_DIR impostata vive DENTRO la config dir (<dir>/.claude.json).
+json_of() {
+  if [ "$1" = default ]; then printf '%s' "$HOME/.claude.json"; else printf '%s' "$ACCOUNTS/$1/.claude.json"; fi
+}
+
+# L'email loggata in un account, letta dal .claude.json (nessuno spawn di
+# processo). Vuota se quell'account non ha mai fatto login.
 email_of() {
-  f="$1/.claude.json"
+  f=$(json_of "$1")
   [ -f "$f" ] || return 0
   sed -n 's/.*"emailAddress"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$f" | head -1
 }
@@ -114,28 +121,28 @@ cmd_resolve() {
 
 cmd_status() {
   resolve "${1:-}"
-  cfg=$(dir_of "$ACCOUNT")
   printf 'account=%s\n' "$ACCOUNT"
-  printf 'config_dir=%s\n' "$cfg"
+  printf 'config_dir=%s\n' "$(dir_of "$ACCOUNT")"
+  printf 'json=%s\n' "$(json_of "$ACCOUNT")"
   printf 'source=%s\n' "$SOURCE"
   printf 'path=%s\n' "$(abspath "${1:-$PWD}")"
-  printf 'email=%s\n' "$(email_of "$cfg")"
+  printf 'email=%s\n' "$(email_of "$ACCOUNT")"
 }
 
 cmd_list() {
-  _row default "$DEFAULT_DIR"
+  _row default
   if [ -d "$ACCOUNTS" ]; then
     for d in "$ACCOUNTS"/*; do
       [ -d "$d" ] || continue
-      _row "$(basename "$d")" "$d"
+      _row "$(basename "$d")"
     done
   fi
 }
 
 _row() {
-  email=$(email_of "$2")
+  email=$(email_of "$1")
   [ -n "$email" ] || email="(mai loggato)"
-  printf '%-14s %-38s %s\n' "$1" "$email" "$2"
+  printf '%-14s %-38s %s\n' "$1" "$email" "$(dir_of "$1")"
 }
 
 cmd_new() {

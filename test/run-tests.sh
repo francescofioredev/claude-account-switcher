@@ -14,8 +14,10 @@ T=$(mktemp -d)
 export HOME="$T/home"
 unset XDG_CONFIG_HOME
 mkdir -p "$HOME/.claude/skills" "$HOME/.claude/agents" "$HOME/proj/alpha/sub" "$HOME/proj/beta" "$HOME/altro"
-printf '{"oauthAccount":{"emailAddress":"default@example.com"}}' > "$HOME/.claude/.claude.json"
 printf 'istruzioni\n' > "$HOME/.claude/CLAUDE.md"
+# Asimmetria di Claude Code: il .claude.json dell'account di default sta ACCANTO
+# a ~/.claude, mentre con CLAUDE_CONFIG_DIR impostata sta DENTRO la config dir.
+printf '{"oauthAccount":{"emailAddress":"default@example.com"}}' > "$HOME/.claude.json"
 
 pass=0; fail=0
 chk() { # chk <descrizione> <atteso> <ottenuto>
@@ -42,6 +44,9 @@ chk "slot creato"          "yes"     "$([ -d "$HOME/.claude-accounts/lavoro" ] &
 chk "skills symlinkate"    "yes"     "$([ -L "$HOME/.claude-accounts/lavoro/skills" ] && echo yes)"
 chk "CLAUDE.md symlinkato" "yes"     "$([ -L "$HOME/.claude-accounts/lavoro/CLAUDE.md" ] && echo yes)"
 chk ".claude.json NON condiviso" ""  "$([ -e "$HOME/.claude-accounts/lavoro/.claude.json" ] && echo yes)"
+chk "slot senza login" "1" "$($CLI list | grep -c 'mai loggato')"
+printf '{"oauthAccount":{"emailAddress":"lavoro@example.com"}}' > "$HOME/.claude-accounts/lavoro/.claude.json"
+chk "slot dopo il login"  "0" "$($CLI list | grep -c 'mai loggato')"
 $CLI new lavoro >/dev/null 2>&1
 chk "new idempotente"      "0"       "$?"
 chk "new default rifiutato" "1"      "$($CLI new default >/dev/null 2>&1; echo $?)"
@@ -54,6 +59,9 @@ chk "match sottocartella"  "$HOME/.claude-accounts/lavoro" "$($CLI resolve "$HOM
 chk "non-match"            ""        "$($CLI resolve "$HOME/proj/beta")"
 chk "source=table"         "table"   "$(field "$($CLI status "$HOME/proj/alpha")" source)"
 chk "prefisso non parziale" ""       "$($CLI resolve "$HOME/proj/alphaXXX" 2>/dev/null)"
+# l'email dello slot si legge da <slot>/.claude.json, quella del default da ~/.claude.json
+chk "email dello slot"     "lavoro@example.com"  "$(field "$($CLI status "$HOME/proj/alpha")" email)"
+chk "email del default"    "default@example.com" "$(field "$($CLI status "$HOME/proj/beta")" email)"
 
 echo "--- 5. commenti e slot inesistenti nella tabella"
 printf '# commento\n\nfantasma\t~/proj/beta\nlavoro\t~/proj/beta\n' >> "$HOME/.config/claude-account/accounts"
