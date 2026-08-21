@@ -1,7 +1,7 @@
-// Solo UI: la verità su "quale account per quale progetto" sta nella CLI
-// `claude-account`, la stessa che consulta il wrapper allo spawn di Claude.
-// Per questo l'override è un file su disco e non stato interno: a leggerlo
-// dev'essere una /bin/sh, nel momento in cui Claude parte.
+// UI only: the truth about "which account for which project" lives in the
+// `claude-account` CLI, the same one the wrapper consults when Claude spawns.
+// That is why an override is a file on disk and not internal state: it has to be
+// readable by a /bin/sh, at the moment Claude starts.
 
 const vscode = require('vscode');
 const cp = require('child_process');
@@ -13,9 +13,9 @@ const CLAUDE_NEW_CONVERSATION = 'claude-vscode.newConversation';
 
 let item;                 // StatusBarItem
 let state = null;         // ultimo risultato di `claude-account status`
-let pendingSwitch = false; // switch fatto ma nessuna nuova conversazione ancora aperta
+let pendingSwitch = false; // switched, but no new conversation opened yet
 let watchers = [];
-let panel = null;         // AccountsViewProvider, se la view è stata creata
+let panel = null;         // AccountsViewProvider, if the view has been created
 let usageCache = [];      // ultimo `claude-account usage --porcelain`
 
 // ---------------------------------------------------------------- CLI
@@ -23,19 +23,31 @@ let usageCache = [];      // ultimo `claude-account usage --porcelain`
 function cliPath() {
   const configured = vscode.workspace.getConfiguration('claudeAccount').get('cliPath');
   if (configured) return configured;
-  // VS Code lanciato dal Dock ha un PATH ridotto e spesso non vede ~/.local/bin:
-  // si prova il percorso di installazione standard prima di affidarsi al PATH.
+  // VS Code launched from the Dock has a reduced PATH and often cannot see
+  // ~/.local/bin: try the standard install path before relying on PATH.
   const local = path.join(os.homedir(), '.local', 'bin', 'claude-account');
   if (fs.existsSync(local)) return local;
   return 'claude-account';
 }
 
-function runCli(args, timeout) {
+function runCli(args, timeout, env) {
   return new Promise((resolve) => {
-    cp.execFile(cliPath(), args, { timeout: timeout || 5000 }, (err, stdout) => {
-      resolve(err ? null : stdout);
-    });
+    cp.execFile(
+      cliPath(),
+      args,
+      { timeout: timeout || 5000, env: env ? { ...process.env, ...env } : process.env },
+      (err, stdout) => {
+        resolve(err ? null : stdout);
+      }
+    );
   });
+}
+
+// The live lookup sends the account's OAuth token to api.anthropic.com, so it stays
+// off until the user asks for it. The CLI enforces the same gate on its own: this
+// only avoids asking for something it would refuse anyway.
+function usageLiveEnabled() {
+  return vscode.workspace.getConfiguration('claudeAccount').get('usageLive', false);
 }
 
 function parseKeyValue(out) {
@@ -49,10 +61,11 @@ function parseKeyValue(out) {
 
 // ---------------------------------------------------------------- finestra
 
-// Deve coincidere con il cwd che l'estensione Claude Code usa per lanciare il
-// processo: realpathSync(workspaceFolders[0] ?? homedir()).normalize('NFC').
-// In un workspace multi-root è la PRIMA cartella del .code-workspace; se qui si
-// calcolasse altro, la status bar mostrerebbe un account diverso da quello in uso.
+// Must match the cwd the Claude Code extension uses to launch the process:
+// realpathSync(workspaceFolders[0] ?? homedir()).normalize('NFC').
+// In a multi-root workspace that is the FIRST folder of the .code-workspace; if we
+// computed anything else here, the status bar would show an account other than the
+// one actually in use.
 function windowPath() {
   const first = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
   try {
@@ -77,17 +90,20 @@ async function listAccounts() {
 }
 
 const SOURCE_LABEL = {
-  override: 'scelto a mano per questo progetto',
-  marker: 'file .claude-account nel progetto',
-  table: 'regola in ~/.config/claude-account/accounts',
-  default: 'nessuna regola: account di default',
+  override: 'picked by hand for this project',
+  marker: '.claude-account file in the project',
+  table: 'rule in ~/.config/claude-account/accounts',
+  default: 'no rule: default account',
 };
 
 // ---------------------------------------------------------------- usage
 
 async function getUsage(live) {
-  const out = live
-    ? await runCli(['usage', '--live', '--porcelain'], 30000)
+  const wantLive = live && usageLiveEnabled();
+  const out = wantLive
+    ? await runCli(['usage', '--live', '--porcelain'], 30000, {
+        CLAUDE_ACCOUNT_USAGE_LIVE: '1',
+      })
     : await runCli(['usage', '--porcelain']);
   if (!out) return [];
   return out
@@ -110,8 +126,8 @@ function staleAfterMs() {
   return Math.max(1, m) * 60000;
 }
 
-// I consumi li aggiorna Claude Code quando gira su quell'account: un numero senza
-// la sua età è indistinguibile da uno vecchio di giorni, quindi va sempre datato.
+// Usage is updated by Claude Code when it runs on that account: a number without
+// its age is indistinguishable from one days old, so it must always be dated.
 function formatAge(ms) {
   if (!ms) return null;
   const min = Math.floor((Date.now() - Number(ms)) / 60000);
@@ -140,7 +156,7 @@ function formatMoney(minor, exponent, currency) {
   const exp = Number(exponent || 0);
   const value = Number(minor) / 10 ** exp;
   try {
-    return new Intl.NumberFormat('it-IT', {
+    return new Intl.NumberFormat(undefined, {
       style: 'currency',
       currency,
       minimumFractionDigits: exp,
@@ -164,10 +180,10 @@ async function refresh() {
     state = null;
     item.text = '$(account) Claude: ?';
     item.tooltip = new vscode.MarkdownString(
-      `**claude-account non raggiungibile**\n\n` +
-        `Provato: \`${cliPath()}\`\n\n` +
-        `Installa il repo (\`./install.sh\`) oppure imposta \`claudeAccount.cliPath\`.\n\n` +
-        `_Claude Code continua a funzionare sull'account di default._`
+      `**claude-account not reachable**\n\n` +
+        `Tried: \`${cliPath()}\`\n\n` +
+        `Install the repo (\`./install.sh\`) or set \`claudeAccount.cliPath\`.\n\n` +
+        `_Claude Code keeps working on the default account._`
     );
     item.backgroundColor = new vscode.ThemeColor('statusBarItem.warningBackground');
     item.show();
@@ -180,12 +196,12 @@ async function refresh() {
   item.text = `${pendingSwitch ? '$(warning)' : '$(account)'} ${label}`;
 
   const md = new vscode.MarkdownString();
-  md.appendMarkdown(`**Account Claude Code di questa finestra**\n\n`);
+  md.appendMarkdown(`**Claude Code account for this window**\n\n`);
   md.appendMarkdown(`- Account: \`${state.account}\`\n`);
-  md.appendMarkdown(`- Login: ${state.email || '_mai fatto — Claude lo chiederà_'}\n`);
-  md.appendMarkdown(`- Perché: ${SOURCE_LABEL[state.source] || state.source}\n`);
+  md.appendMarkdown(`- Login: ${state.email || '_never — Claude will ask_'}\n`);
+  md.appendMarkdown(`- Why: ${SOURCE_LABEL[state.source] || state.source}\n`);
   md.appendMarkdown(`- Config dir: \`${state.config_dir}\`\n`);
-  md.appendMarkdown(`- Progetto: \`${state.path}\`\n`);
+  md.appendMarkdown(`- Project: \`${state.path}\`\n`);
 
   if (vscode.workspace.getConfiguration('claudeAccount').get('usageInTooltip', true)) {
     const u = usageCache.find((r) => r.name === state.account);
@@ -194,20 +210,20 @@ async function refresh() {
     if (five != null || seven != null) {
       const age = formatAge(Number(u.fetched_at_ms));
       md.appendMarkdown(
-        `- Consumi: ${five != null ? `5h ${five}%` : '—'} · ` +
-          `${seven != null ? `7g ${seven}%` : '—'}${age ? ` · ${age}` : ''}\n`
+        `- Usage: ${five != null ? `5h ${five}%` : '—'} · ` +
+          `${seven != null ? `7d ${seven}%` : '—'}${age ? ` · ${age}` : ''}\n`
       );
     }
   }
 
   if (pendingSwitch) {
     md.appendMarkdown(
-      `\n---\n\n⚠️ Le conversazioni **già aperte** girano ancora sull'account precedente: ` +
-        `il cambio vale da quella successiva.\n`
+      `\n---\n\n⚠️ Conversations **already open** still run on the previous account: ` +
+        `the switch applies from the next one.\n`
     );
   }
   md.appendMarkdown(
-    `\n_Clicca per cambiare account._ · [Pannello](command:claudeAccount.showPanel)`
+    `\n_Click to switch account._ · [Panel](command:claudeAccount.showPanel)`
   );
   md.isTrusted = true;
   md.supportThemeIcons = true;
@@ -238,8 +254,8 @@ const ICON = {
     '<svg viewBox="0 0 16 16" width="13" height="13" fill="currentColor"><circle cx="3.5" cy="8" r="1.2"/><circle cx="8" cy="8" r="1.2"/><circle cx="12.5" cy="8" r="1.2"/></svg>',
 };
 
-// Le percentuali di quota non sono un "quanto manca" lineare: sotto il 50% la
-// differenza non interessa, sopra l'80% conta ogni punto. Il colore cambia solo lì.
+// Quota percentages are not a linear "how much is left": below 50% the difference
+// does not matter, above 80% every point counts. The colour only changes there.
 function level(p) {
   if (p >= 90) return 'crit';
   if (p >= 75) return 'warn';
@@ -268,26 +284,26 @@ function card(u, current) {
 
   let body;
   if (!logged) {
-    body = `<div class="none">Mai loggato</div>
-      <div class="acts always"><button class="pri" data-a="login" data-n="${n}">Fai il login</button></div>`;
+    body = `<div class="none">Never logged in</div>
+      <div class="acts always"><button class="pri" data-a="login" data-n="${n}">Log in</button></div>`;
   } else {
     const five = pct(u.five_hour_pct);
     const seven = pct(u.seven_day_pct);
     const spend = formatMoney(u.spend_used_minor, u.spend_exponent, u.spend_currency);
     const cap = formatMoney(u.spend_limit_minor, u.spend_exponent, u.spend_currency);
     const meters =
-      meter('Sessione', five, u.five_hour_resets_at, veryStale, u.active_limit === 'session') +
-      meter('Settimana', seven, u.seven_day_resets_at, veryStale, u.active_limit === 'weekly_all');
+      meter('Session', five, u.five_hour_resets_at, veryStale, u.active_limit === 'session') +
+      meter('Week', seven, u.seven_day_resets_at, veryStale, u.active_limit === 'weekly_all');
 
     body =
-      (meters || '<div class="none">Nessun dato di consumo</div>') +
+      (meters || '<div class="none">No usage data</div>') +
       (u.extra_enabled === '1' && spend
-        ? `<div class="xtra"><span>Credito extra</span><b>${esc(spend)}${cap ? ` <span class="of">di ${esc(cap)}</span>` : ''}</b></div>`
+        ? `<div class="xtra"><span>Extra credit</span><b>${esc(spend)}${cap ? ` <span class="of">of ${esc(cap)}</span>` : ''}</b></div>`
         : '') +
       `<div class="acts">
-         <button data-a="relogin" data-n="${n}">Rifai login</button>
-         <button data-a="logout" data-n="${n}">Disconnetti</button>
-         ${u.name === 'default' ? '' : `<button class="ico" data-a="more" data-n="${n}" title="Rinomina o elimina" aria-label="Altre azioni per ${n}">${ICON.more}</button>`}
+         <button data-a="relogin" data-n="${n}">Log in again</button>
+         <button data-a="logout" data-n="${n}">Log out</button>
+         ${u.name === 'default' ? '' : `<button class="ico" data-a="more" data-n="${n}" title="Rename or delete" aria-label="More actions for ${n}">${ICON.more}</button>`}
        </div>`;
   }
 
@@ -296,8 +312,8 @@ function card(u, current) {
     <div class="hd">
       <span class="nm">${n}</span>
       ${isCurrent
-        ? '<span class="tag">attivo</span>'
-        : `<button class="use" data-a="use" data-n="${n}">Usa qui</button>`}
+        ? '<span class="tag">active</span>'
+        : `<button class="use" data-a="use" data-n="${n}">Use here</button>`}
     </div>
     ${u.email ? `<div class="em" title="${esc(u.email)}">${esc(u.email)}${tier ? ` <span class="tier">${esc(tier)}</span>` : ''}</div>` : ''}
     ${body}
@@ -308,24 +324,24 @@ function panelHtml(webview, records, current, projectPath) {
   const nonce = Math.random().toString(36).slice(2) + Date.now().toString(36);
   const cards = records.length
     ? records.map((u) => card(u, current)).join('')
-    : `<div class="empty"><b>claude-account non raggiungibile</b>
-         Esegui <code>./install.sh</code> oppure imposta <code>claudeAccount.cliPath</code>.</div>`;
+    : `<div class="empty"><b>claude-account not reachable</b>
+         Run <code>./install.sh</code> or set <code>claudeAccount.cliPath</code>.</div>`;
 
-  // La freschezza è una proprietà della fetch, non del singolo account: una riga
-  // sola in fondo invece della stessa frase ripetuta su ogni card.
+  // Freshness is a property of the fetch, not of the individual account: one line
+  // at the bottom instead of the same sentence repeated on every card.
   const withData = records.filter((r) => r.fetched_at_ms);
-  // Il footer parla del dato PIÙ VECCHIO: con freschezze miste, dire "aggiornato
-  // adesso" perché una card lo è nasconderebbe quella ferma a giorni fa.
+  // The footer talks about the OLDEST datum: with mixed freshness, saying "updated
+  // just now" because one card is would hide the one stuck days ago.
   const allLive = withData.length > 0 && withData.every((r) => r.live === '1');
   const oldest = withData.length ? Math.min(...withData.map((r) => Number(r.fetched_at_ms))) : 0;
   const stale = oldest ? Date.now() - oldest > staleAfterMs() : false;
   const foot = !withData.length
     ? ''
     : allLive
-    ? 'Aggiornato adesso'
-    : `${stale ? '⚠ ' : ''}Dati di ${formatAge(oldest)}`;
+    ? 'Updated just now'
+    : `${stale ? '⚠ ' : ''}Data from ${formatAge(oldest)}`;
 
-  return `<!DOCTYPE html><html lang="it"><head><meta charset="utf-8">
+  return `<!DOCTYPE html><html lang="en"><head><meta charset="utf-8">
 <meta http-equiv="Content-Security-Policy"
   content="default-src 'none'; style-src 'unsafe-inline'; script-src 'nonce-${nonce}';">
 <style>
@@ -346,8 +362,8 @@ function panelHtml(webview, records, current, projectPath) {
     transition: border-color 160ms ease, background-color 160ms ease;
   }
   .card:hover { background: var(--vscode-list-hoverBackground); }
-  /* L'account attivo si distingue per una barra laterale, non per un bordo pieno:
-     resta leggibile anche quando la card è in hover. */
+  /* The active account is marked by a side bar, not a full border: it stays
+     readable even while the card is hovered. */
   .card.cur { border-color: var(--vscode-focusBorder); }
   .card.cur::before {
     content: ''; position: absolute; left: -1px; top: 8px; bottom: 8px; width: 2px;
@@ -376,7 +392,7 @@ function panelHtml(webview, records, current, projectPath) {
   .m { margin-top: 9px; }
   .mtop { display: flex; align-items: baseline; gap: 6px; margin-bottom: 4px; }
   .mk { flex: none; color: var(--vscode-descriptionForeground); }
-  /* Il numero è il dato: prende il peso, la barra lo accompagna. */
+  /* The number is the data: it takes the weight, the bar supports it. */
   .mv {
     flex: 1; text-align: right; font-size: 13px; font-weight: 600;
     font-variant-numeric: tabular-nums; letter-spacing: -.02em;
@@ -481,19 +497,19 @@ class AccountsViewProvider {
     this.view = view;
     view.webview.options = { enableScripts: true };
     view.webview.onDidReceiveMessage((m) => handleAction(m));
-    // Ricostruire il pannello mentre è nascosto è lavoro buttato: Claude riscrive
-    // .claude.json di frequente e ogni write sveglia i watcher.
+    // Rebuilding the panel while it is hidden is wasted work: Claude rewrites
+    // .claude.json often and every write wakes the watchers.
     view.onDidChangeVisibility(() => {
       autoLive(view.visible);
       if (view.visible) {
         this.render();
-        // rientrando sul pannello il dato può essere invecchiato mentre era chiuso
+        // coming back to the panel, the data may have aged while it was closed
         if (usageStale()) refreshAll(true);
       }
     });
     view.onDidDispose(() => autoLive(false));
     this.render();
-    // primo dato vero all'apertura: la cache è quasi sempre di giorni fa
+    // first real data on open: the cache is almost always days old
     refreshAll(true);
     autoLive(true);
   }
@@ -534,8 +550,8 @@ async function handleAction(m) {
 async function moreActions(name) {
   const picked = await vscode.window.showQuickPick(
     [
-      { label: '$(edit) Rinomina…', detail: 'Sposta lo slot; richiede un nuovo login', action: 'rename' },
-      { label: '$(trash) Elimina', detail: 'Rimuove slot, credenziali e override. Irreversibile', action: 'delete' },
+      { label: '$(edit) Rename…', detail: 'Moves the slot; requires logging in again', action: 'rename' },
+      { label: '$(trash) Delete', detail: 'Removes the slot, credentials and overrides. Irreversible', action: 'delete' },
     ],
     { title: `Account "${name}"` }
   );
@@ -543,7 +559,7 @@ async function moreActions(name) {
   if (picked?.action === 'delete') return doDelete(name);
 }
 
-// La riga di login la scrive la CLI: qui non si costruiscono percorsi.
+// The CLI writes the login line: no paths are built here.
 async function openLogin(name) {
   const cmd = await runCli(['login-cmd', name]);
   if (!cmd) {
@@ -556,22 +572,22 @@ async function openLogin(name) {
 }
 
 async function doLogout(name) {
-  // Peggio dell'eliminazione: la dir resta, quindi la risoluzione continua a
-  // sceglierlo e la conversazione dopo sbatte su un prompt di auth a metà lavoro.
+  // Worse than deleting: the dir stays, so resolution keeps picking it and the next
+  // conversation walks into an auth prompt mid-work.
   const warn =
     name === state?.account
-      ? `\n\nÈ l'account in uso in questa finestra: la prossima conversazione chiederà il login.`
+      ? `\n\nThis is the account in use in this window: the next conversation will ask for a login.`
       : '';
   const ok = await vscode.window.showWarningMessage(
-    `Disconnettere "${name}"?${warn}`,
+    `Log "${name}" out?${warn}`,
     { modal: true },
-    'Disconnetti'
+    'Log out'
   );
   if (!ok) return;
 
   const out = await runCli(['logout', name]);
   if (out === null) {
-    vscode.window.showErrorMessage(`Logout di "${name}" non riuscito.`);
+    vscode.window.showErrorMessage(`Could not log "${name}" out.`);
     return;
   }
   await refreshAll();
@@ -579,62 +595,62 @@ async function doLogout(name) {
 
 async function doRename(name) {
   const to = await vscode.window.showInputBox({
-    title: `Rinomina "${name}"`,
-    prompt: 'Le credenziali sono legate al percorso: dopo la rinomina serve un nuovo login.',
+    title: `Rename "${name}"`,
+    prompt: 'Credentials are tied to the path: after renaming you have to log in again.',
     value: name,
     validateInput: (v) =>
       !/^[A-Za-z0-9._-]+$/.test(v || '')
-        ? 'Solo lettere, numeri, punto, trattino e underscore.'
+        ? 'Letters, numbers, dot, dash and underscore only.'
         : v === name
-        ? 'È lo stesso nome.'
+        ? 'That is the same name.'
         : v === 'default'
-        ? "'default' è riservato."
+        ? "'default' is reserved."
         : null,
   });
   if (!to) return;
 
   const out = await runCli(['rename', name, to]);
   if (out === null) {
-    vscode.window.showErrorMessage(`Non sono riuscito a rinominare "${name}".`);
+    vscode.window.showErrorMessage(`Could not rename "${name}".`);
     return;
   }
   await refreshAll();
   const choice = await vscode.window.showWarningMessage(
-    `"${name}" è ora "${to}". Le credenziali erano legate al vecchio percorso: serve un nuovo login.`,
-    'Fai il login'
+    `"${name}" is now "${to}". The credentials were tied to the old path: you have to log in again.`,
+    'Log in'
   );
   if (choice) return openLogin(to);
 }
 
 async function doDelete(name) {
   const warn =
-    name === state?.account ? `\n\nÈ l'account in uso in questa finestra.` : '';
+    name === state?.account ? `\n\nThis is the account in use in this window.` : '';
   const ok = await vscode.window.showWarningMessage(
-    `Eliminare "${name}"?${warn}\n\nVengono rimossi lo slot, le credenziali nel Keychain e gli override che lo usano. Non si torna indietro.`,
+    `Delete "${name}"?${warn}\n\nThis removes the slot, its Keychain credentials and the overrides using it. There is no going back.`,
     { modal: true },
-    'Elimina'
+    'Delete'
   );
   if (!ok) return;
 
   let out = await runCli(['rm', name]);
   if (out === null) {
-    // Il rifiuto più probabile: config copiata invece che symlinkata, quei file
-    // sono unici e la CLI non li butta senza un sì esplicito.
+    // The most likely refusal: config copied instead of symlinked. Those files are
+    // unique and the CLI will not throw them away without an explicit yes.
     const forced = await vscode.window.showWarningMessage(
-      `"${name}" contiene config copiata (non symlink) che andrebbe persa. Eliminare comunque?`,
+      `"${name}" holds copied config (not symlinks) that would be lost. Delete anyway?`,
       { modal: true },
-      'Elimina comunque'
+      'Delete anyway'
     );
     if (!forced) return;
     out = await runCli(['rm', name, '--force']);
     if (out === null) {
-      vscode.window.showErrorMessage(`Eliminazione di "${name}" non riuscita.`);
+      vscode.window.showErrorMessage(`Could not delete "${name}".`);
       return;
     }
   }
 
-  // Le conversazioni aperte tengono ancora la vecchia CLAUDE_CONFIG_DIR, che ora
-  // punta a una dir che non c'è più.
+  // Open conversations still hold the old CLAUDE_CONFIG_DIR, which now points at a
+  // directory that no longer exists.
   if (name === state?.account) pendingSwitch = true;
   await refreshAll();
   vscode.window.showInformationMessage(out.trim().split('\n')[0]);
@@ -646,7 +662,7 @@ let liveTimer = null;
 function autoLive(on) {
   clearInterval(liveTimer);
   liveTimer = null;
-  if (!on) return;
+  if (!on || !usageLiveEnabled()) return;
   const min = vscode.workspace
     .getConfiguration('claudeAccount')
     .get('usageRefreshMinutes', 10);
@@ -663,17 +679,17 @@ function bump() {
 
 let refreshing = false;
 
-// Claude Code riscrive .claude.json in continuazione (misurato: anche ogni pochi
-// secondi), e ogni scrittura sveglia i watcher. Senza questo merge un refresh da
-// cache sovrascriverebbe i dati appena presi dall'API con quelli vecchi del file,
-// facendo "scadere" la lettura live pochi secondi dopo averla fatta.
+// Claude Code rewrites .claude.json constantly (measured: as often as every few
+// seconds), and every write wakes the watchers. Without this merge a cached refresh
+// would overwrite data just fetched from the API with the file's older values,
+// "expiring" the live reading seconds after taking it.
 function mergeUsage(fresh, prev) {
   return fresh.map((r) => {
     if (r.live === '1') return r;
     const old = prev.find((o) => o.name === r.name);
     if (!old || old.live !== '1') return r;
-    // il dato in cache è più recente di quello live solo se Claude ha davvero
-    // rinfrescato il campo: in quel caso vince lui
+    // cached data is newer than live only if Claude really did refresh the field:
+    // in that case it wins
     if (Number(r.fetched_at_ms) > Number(old.fetched_at_ms)) return r;
     return { ...old, logged_in: r.logged_in, email: r.email || old.email };
   });
@@ -683,7 +699,7 @@ async function refreshAll(live) {
   if (live && refreshing) return;
   if (live) {
     refreshing = true;
-    if (panel?.view) panel.view.description = 'aggiorno…';
+    if (panel?.view) panel.view.description = 'refreshing…';
   }
   try {
     const fresh = await getUsage(live);
@@ -706,7 +722,7 @@ async function switchAccount() {
 
   if (!accounts.length) {
     vscode.window.showErrorMessage(
-      `claude-account non raggiungibile (provato: ${cliPath()}). Esegui ./install.sh o imposta claudeAccount.cliPath.`
+      `claude-account not reachable (tried: ${cliPath()}). Run ./install.sh or set claudeAccount.cliPath.`
     );
     return;
   }
@@ -714,7 +730,7 @@ async function switchAccount() {
   const current = state?.account;
   const items = accounts.map((a) => ({
     label: `${a.name === current ? '$(check) ' : '      '}${a.name}`,
-    description: a.email || '⚠ mai loggato',
+    description: a.email || '⚠ never logged in',
     detail: a.configDir,
     account: a.name,
   }));
@@ -722,19 +738,19 @@ async function switchAccount() {
   items.push({ label: '', kind: vscode.QuickPickItemKind.Separator });
   if (state?.source === 'override') {
     items.push({
-      label: '$(discard) Usa il default del progetto',
-      detail: 'Rimuove la scelta manuale e torna alla regola configurata',
+      label: '$(discard) Use the project default',
+      detail: 'Removes the manual choice and goes back to the configured rule',
       action: 'clear',
     });
   }
   items.push({
-    label: '$(add) Nuovo account…',
-    detail: 'Crea uno slot e apri il login nel terminale',
+    label: '$(add) New account…',
+    detail: 'Creates a slot and opens the login in the terminal',
     action: 'new',
   });
 
   const picked = await vscode.window.showQuickPick(items, {
-    title: 'Account Claude Code per questo progetto',
+    title: 'Claude Code account for this project',
     placeHolder: path.basename(p),
   });
   if (!picked) return;
@@ -754,32 +770,32 @@ async function switchAccount() {
 
 async function createAccount() {
   const name = await vscode.window.showInputBox({
-    title: 'Nuovo account Claude Code',
-    prompt: 'Nome breve dello slot (es. lavoro). Verrà creato ~/.claude-accounts/<nome>.',
+    title: 'New Claude Code account',
+    prompt: 'Short slot name (e.g. work). It will create ~/.claude-accounts/<name>.',
     validateInput: (v) =>
-      /^[A-Za-z0-9._-]+$/.test(v || '') ? null : 'Solo lettere, numeri, punto, trattino e underscore.',
+      /^[A-Za-z0-9._-]+$/.test(v || '') ? null : 'Letters, numbers, dot, dash and underscore only.',
   });
   if (!name) return;
 
   const out = await runCli(['new', name]);
   if (out === null) {
-    vscode.window.showErrorMessage(`Non sono riuscito a creare lo slot "${name}".`);
+    vscode.window.showErrorMessage(`Could not create the slot "${name}".`);
     return;
   }
 
-  // Il login è un flusso OAuth nel browser: va fatto dall'utente in un terminale.
+  // Login is a browser OAuth flow: the user has to do it in a terminal.
   await openLogin(name);
   await refreshAll();
 
   vscode.window.showInformationMessage(
-    `Slot "${name}" creato. Completa il login nel terminale per usarlo.`
+    `Slot "${name}" created. Finish the login in the terminal to use it.`
   );
 }
 
 async function offerNewConversation() {
   const choice = await vscode.window.showInformationMessage(
-    `Account impostato su "${state?.account ?? '?'}". Vale dalla prossima conversazione.`,
-    'Apri una nuova conversazione'
+    `Account set to "${state?.account ?? '?'}". It applies from the next conversation.`,
+    'Open a new conversation'
   );
   if (choice) {
     try {
@@ -788,13 +804,13 @@ async function offerNewConversation() {
       await refresh();
     } catch {
       vscode.window.showWarningMessage(
-        "Non sono riuscito ad aprire una nuova conversazione: fallo a mano dal pannello di Claude Code."
+        'Could not open a new conversation: do it by hand from the Claude Code panel.'
       );
     }
   }
 }
 
-// ---------------------------------------------------------------- attivazione
+// ---------------------------------------------------------------- activation
 
 async function setupWatchers(context) {
   watchers.forEach((w) => w.dispose());
@@ -805,8 +821,8 @@ async function setupWatchers(context) {
       ? path.join(process.env.XDG_CONFIG_HOME, 'claude-account')
       : path.join(os.homedir(), '.config', 'claude-account');
 
-  // La scelta può cambiare da un'altra finestra o da terminale: la label deve
-  // restare vera comunque, non solo quando è questa finestra a cambiarla.
+  // The choice can change from another window or from a terminal: the label has to
+  // stay true regardless, not only when this window is the one changing it.
   const targets = [
     new vscode.RelativePattern(vscode.Uri.file(conf), '{accounts,overrides/**}'),
     new vscode.RelativePattern(vscode.Uri.file(os.homedir()), '.claude.json'),

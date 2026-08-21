@@ -1,175 +1,159 @@
 # claude-account-switcher
 
-Un account Claude Code diverso per ogni progetto, scelto automaticamente in base alla cartella che apri —
-e visibile nella status bar di VS Code, come il branch git.
+One Claude Code account per project, picked automatically from the directory you are in — and
+shown in the VS Code status bar like a git branch.
 
-Claude Code tiene **un solo login per macchina**: `/logout` + `/login` cambia l'account ovunque, e non esiste
-un'impostazione di account per workspace. Se lavori su due progetti con due account diversi (personale e
-lavoro, due clienti, due organizzazioni) l'unica alternativa è rifare il login ogni volta.
+> Not affiliated with, endorsed by, or sponsored by Anthropic. Claude and Claude Code are
+> trademarks of Anthropic.
 
-## Come funziona
+## How it works
 
-Claude Code isola credenziali e stato per `CLAUDE_CONFIG_DIR`. Su macOS le credenziali stanno nel Keychain, ma
-il **nome del servizio dipende dalla config dir**:
+Claude Code keeps one login per machine, but it isolates credentials and state per
+`CLAUDE_CONFIG_DIR`. On macOS the Keychain service it uses depends on that variable:
 
-| `CLAUDE_CONFIG_DIR` | servizio Keychain |
+| `CLAUDE_CONFIG_DIR` | Keychain service |
 |---|---|
-| non impostata | `Claude Code-credentials` |
-| impostata | `Claude Code-credentials-<sha256(dir)[0:8]>` |
+| unset | `Claude Code-credentials` |
+| set | `Claude Code-credentials-<sha256(dir)[0:8]>` |
 
-Quindi più account possono restare **loggati insieme**, senza logout/login quando cambi progetto.
+So several accounts can stay logged in at the same time, each in its own config dir. This
+project is the piece that decides which one to use, per project:
 
-Resta il problema di impostare quella variabile in modo diverso per ogni progetto. In VS Code non si può fare
-con le impostazioni di workspace: `claudeCode.environmentVariables` e `claudeCode.claudeProcessWrapper` sono
-dichiarate `"scope": "machine"`, e VS Code ignora i valori machine-scoped messi in `.vscode/settings.json`.
+- **`bin/claude-account`** — the CLI, and the single source of truth. Everything else asks it.
+- **`bin/claude-account-wrapper`** — set as `claudeCode.claudeProcessWrapper`, it sets the
+  variable when the VS Code extension spawns Claude.
+- **`shell/claude-account.zsh`** — the same thing for `claude` launched from a terminal.
+- **`extension/`** — the VS Code extension: status bar, account panel, switching.
 
-La soluzione è `claudeCode.claudeProcessWrapper`: un wrapper che l'estensione ufficiale invoca come
-`<wrapper> <binario-claude> <args...>`, e che quindi può **decidere a runtime dalla cartella corrente**. È
-anche l'unico punto che risolve per-finestra: due finestre su due progetti diversi restano ognuna sul proprio
-account.
+Nothing in your Claude Code installation is patched. The two settings used
+(`claudeCode.claudeProcessWrapper` and the config dir variable) are Claude Code's own.
 
-## Installazione
+## Requirements
+
+- **macOS.** Credential handling goes through `security(1)`. Linux and Windows are not
+  supported today.
+- `curl`, plus `jq` **or** `node` for JSON parsing. macOS 13 and 14 ship no system `jq`, hence
+  the fallback.
+- VS Code 1.85+ for the extension.
+
+## Installation
 
 ```sh
-git clone <questo-repo> ~/Coding/claude-account-switcher
-cd ~/Coding/claude-account-switcher
+git clone https://github.com/francescofioredev/claude-account-switcher.git
+cd claude-account-switcher
 ./install.sh
 ```
 
-`install.sh` fa symlink dei due eseguibili in `~/.local/bin` e crea `~/.config/claude-account/`. Poi seguine
-le due istruzioni finali: il setting di VS Code e la riga per la shell.
+`install.sh` symlinks rather than copies, so `git pull` updates everything — which means the
+clone has to stay where it is. It then prints two manual steps: pointing
+`claudeCode.claudeProcessWrapper` at the wrapper in your **user** settings, and sourcing the
+zsh hook.
 
-Il repo deve restare dov'è (l'installazione è a symlink, così `git pull` aggiorna tutto).
+The wrapper setting has to go in user settings. It is machine-scoped, and VS Code ignores
+machine-scoped values in workspace settings — which is also why `claudeCode.environmentVariables`
+cannot be used to do this per project.
 
-## Uso
-
-Creare un account e fare il login:
-
-```sh
-claude-account new lavoro
-CLAUDE_CONFIG_DIR=$HOME/.claude-accounts/lavoro claude auth login
-```
-
-Mappare i progetti, in `~/.config/claude-account/accounts` — una riga per regola, vince il primo match:
-
-```
-lavoro   ~/Coding/acme
-```
-
-Da qui in poi ogni sessione Claude aperta sotto `~/Coding/acme` usa l'account `lavoro`, tutto il resto usa
-quello di default. Per controllare:
+## Usage
 
 ```sh
-claude-account list                      # chi è loggato in quale slot
-claude-account status ~/Coding/acme/api  # account, config dir, e perché
-claude-account usage                     # consumi dalla cache locale
-claude-account usage --live              # consumi veri, chiesti all'API
+claude-account new work                  # create the slot ~/.claude-accounts/work
+claude-account login-cmd work            # print the login line for it
+claude-account list                      # who is logged in to which slot
+claude-account status ~/projects/acme    # account, config dir, and why
+claude-account usage                     # usage from the local cache
+claude-account usage --live              # real usage, asked from the API
 ```
 
-### Gestire gli account
+### Managing accounts
 
 ```sh
-claude-account login-cmd lavoro      # stampa la riga di login di quello slot
-claude-account logout lavoro         # disconnette e rimuove le credenziali
-claude-account rename lavoro ufficio # sposta lo slot (richiede un nuovo login)
-claude-account rm lavoro             # elimina slot, credenziali e override
+claude-account logout work         # log out and remove the credentials
+claude-account rename work office  # move the slot (requires logging in again)
+claude-account rm work             # delete slot, credentials and overrides
 ```
 
-`rm` rimuove anche la voce del Keychain e gli override che puntavano a quell'account; se la
-tabella `accounts` lo cita ancora te lo dice, senza toccarla (è scritta a mano). Se dentro lo
-slot trova config **copiata** invece che symlinkata si ferma: quei file sono unici, e li
-cancella solo con `--force`.
+`rm` also removes the Keychain entry and any overrides pointing at that account; if the
+`accounts` table still mentions it you get told, without the file being touched — it is
+hand-written. If it finds config inside the slot that was **copied** rather than symlinked it
+stops: those files are unique, and only `--force` deletes them.
 
-### I tre livelli di precedenza
+### The three levels of precedence
 
-1. **override** — `claude-account use <nome> [path]`, quello che scrive la status bar. `claude-account clear`
-   lo rimuove.
-2. **`.claude-account`** — un file nel repo con dentro il nome dell'account, versionabile: dichiara l'intento
-   una volta per tutto il team.
-3. **`accounts`** — la tabella dei prefissi di path.
+1. **override** — `claude-account use <name> [path]`, what the status bar writes.
+   `claude-account clear` removes it.
+2. **marker file** — a `.claude-account` file in the repo holding the account name. Committable,
+   so it travels with the project.
+3. **table** — `~/.config/claude-account/accounts`, mapping path prefixes to accounts. First
+   match wins, so write from the most specific to the most generic.
 
-`default` è un nome di account valido a tutti i livelli, e vale "l'account in `~/.claude`": serve per
-riportare al default una sottocartella di un albero mappato altrove.
+Anything that matches nothing falls through to the default account, `~/.claude`. An account
+named in a rule but not yet created is skipped and resolution continues, so a rule written
+ahead of time breaks nothing.
 
-## Cosa condividono gli account
+## What accounts share
 
-`claude-account new` non crea uno slot vuoto: fa symlink da `~/.claude` di skill, agent, comandi, plugin,
-hook, `settings.json` e `CLAUDE.md`, così il tuo tooling è lo stesso ovunque. Symlinka anche `projects/`, che
-è dove vivono memory e cronologia delle conversazioni: puoi spostare un progetto da un account all'altro senza
-perdere `--continue` né le memory.
+A new slot gets symlinks back into `~/.claude` for `CLAUDE.md`, `settings.json`,
+`settings.local.json`, `skills`, `agents`, `commands`, `plugins`, `hooks` and `projects`. Edit
+the `SHARED` list at the top of `bin/claude-account` to change what is shared.
 
-Restano separati per account: `.claude.json` (identità, stato dei progetti, MCP user-scoped), `sessions/`,
-`history.jsonl`, `cache/` e le altre directory volatili.
+Everything account-specific or volatile stays separate: `.claude.json`, `ide/`, `sessions/`,
+`session-env/`, `shell-snapshots/`, `file-history/`, `history.jsonl`, `backups/`, `cache/`,
+`telemetry/`.
 
-Se un account deve avere un confine di riservatezza, togli `projects` da `SHARED` in `bin/claude-account`: i
-transcript smettono di essere condivisi, al prezzo di perdere memory e `--continue` quando sposti un progetto.
+## VS Code extension
 
-## Estensione VS Code
+In `extension/`. Shows the active account in the status bar and switches it with a click; the
+tooltip also says **why** that account is active — override, marker file, table or default.
 
-In `extension/`. Mostra l'account attivo nella status bar e permette di cambiarlo con un click; il tooltip
-dice anche **perché** quell'account è attivo (override, marker file, tabella o default).
-
-Nella Activity Bar c'è un pannello con una card per account: consumi delle ultime 5 ore e dei 7
-giorni, quando si azzerano, credito extra se attivo, e i pulsanti per rifare il login,
-disconnettere, rinominare ed eliminare. I consumi si aggiornano all'apertura e con ⟳.
+The Activity Bar panel has one card per account: usage over the last 5 hours and 7 days, when
+they reset, extra credit if enabled, and buttons to log in, log out, rename and delete.
 
 ```sh
 cd extension
-npx @vscode/vsce package --allow-missing-repository --skip-license
+npx @vscode/vsce package
 code --install-extension claude-account-switcher-*.vsix
 ```
 
-L'estensione non duplica la logica di risoluzione: interroga `claude-account`, la stessa CLI che consulta il
-wrapper. Se non la trova, lo dice nel tooltip e Claude Code continua a funzionare sull'account di default.
-
-| Setting | Default | A cosa serve |
+| Setting | Default | Meaning |
 |---|---|---|
-| `claudeAccount.cliPath` | vuoto | Percorso di `claude-account`. Vuoto = prova `~/.local/bin/claude-account`, poi il PATH. Serve perché VS Code lanciato dal Dock ha un PATH ridotto. |
-| `claudeAccount.statusBarPriority` | `99` | Posizione nella status bar: più alto, più a sinistra. |
-| `claudeAccount.usageStaleAfterMinutes` | `360` | Dopo quanti minuti i consumi vengono segnalati come vecchi. |
-| `claudeAccount.usageInTooltip` | `true` | Riga di consumi nel tooltip della status bar. |
+| `claudeAccount.cliPath` | empty | Path to `claude-account`. Empty = try `~/.local/bin/claude-account`, then the PATH. Needed because VS Code launched from the Dock has a reduced PATH. |
+| `claudeAccount.statusBarPriority` | `99` | Position in the status bar: higher is further left. |
+| `claudeAccount.usageLive` | `false` | Ask the API for real usage figures. See below. |
+| `claudeAccount.usageStaleAfterMinutes` | `360` | After how many minutes usage is flagged as out of date. |
+| `claudeAccount.usageInTooltip` | `true` | Usage line in the status bar tooltip. |
+| `claudeAccount.usageRefreshMinutes` | `10` | How often the panel refreshes usage while open. `0` disables it. Only applies when `usageLive` is on. |
 
-### Da dove vengono i consumi
+### Where usage figures come from
 
-Da `GET /api/oauth/usage`, lo stesso endpoint che chiama Claude Code, autenticato con il token
-OAuth di quell'account letto dal Keychain. È l'unico modo per avere numeri veri: in
-`.claude.json` c'è un `cachedUsageUtilization`, ma Claude Code lo rinfresca di rado — misurato
-su questa macchina, il file veniva riscritto ogni 3 minuti con il campo fermo da 15 ore, e i
-valori in cache (14%) erano il quadruplo di quelli reali (3%).
+By default, from `cachedUsageUtilization` in `.claude.json` — written by Claude Code itself.
+That field only updates when Claude actually runs on that account, so it can be hours or days
+old. Every card says how old its data is.
 
-La chiamata parte **solo su richiesta**: all'apertura del pannello e quando premi ⟳. I refresh
-automatici dai watcher usano la cache, così non c'è traffico di rete né rischio di prompt del
-Keychain a ogni scrittura di `.claude.json`. Ogni card dice se il dato è live o in cache.
+Turning on `claudeAccount.usageLive` (or setting `CLAUDE_ACCOUNT_USAGE_LIVE=1` for the CLI)
+makes it ask `GET /api/oauth/usage` instead, authenticated with that account's OAuth token read
+from the Keychain. This is **off by default** because it sends your token over the network —
+to `api.anthropic.com` and nowhere else. See [SECURITY.md](SECURITY.md).
 
-Se la chiamata fallisce — token illeggibile, rete giù, endpoint cambiato — si ricade sulla
-cache, etichettata come tale. Nessun errore bloccante.
+`/api/oauth/usage` is **not documented**. A Claude Code update may change or remove it; if the
+call fails for any reason the cached values are used instead, labelled as cached.
 
-⚠️ `/api/oauth/usage` **non è documentato**: un aggiornamento di Claude Code può cambiarlo o
-rimuoverlo, e in quel caso restano i valori in cache finché non si aggiorna questo repo.
+## Good to know
 
-Serve `curl` (di sistema) più `jq` (di sistema su macOS 15+) oppure `node` come ripiego. Se
-mancano i parser il pannello resta senza barre e tutto il resto continua a funzionare.
+- **An account switch applies from the next conversation.** The wrapper runs when the Claude
+  process spawns, so a conversation already open stays on the account it started with.
+- **Don't move a config dir by hand after logging in.** The Keychain key is a hash of the path:
+  change it and the account looks logged out, with the old credentials orphaned. Use
+  `claude-account rename`, which cleans up the old credentials and tells you to log in again.
+- **Setting `CLAUDE_CONFIG_DIR` to the default value is not the same as leaving it unset**, for
+  the same reason. That is why the wrapper unsets it instead of setting it.
+- **MCP servers and connectors are per account.** User-scoped MCP servers and claude.ai
+  connectors have to be re-authorized on each account.
 
-## Da sapere
+## Contributing
 
-- **Il cambio account vale dalla conversazione successiva.** Il wrapper viene eseguito allo spawn del processo
-  Claude: una conversazione già aperta continua sull'account con cui è partita.
-- **Non spostare a mano una config dir dopo il login.** La chiave del Keychain è l'hash del path:
-  cambiandolo l'account risulta sloggato e le vecchie credenziali restano orfane. Per rinominare usa
-  `claude-account rename`, che pulisce le credenziali vecchie e ti dice di rifare il login.
-- **`CLAUDE_CONFIG_DIR` impostata al valore di default non equivale a non impostarla**, sempre per lo stesso
-  motivo. Per questo il wrapper fa `unset` invece di impostarla.
-- **MCP e connettori sono per account.** Gli MCP user-scoped e i connettori claude.ai vanno riautorizzati sul
-  nuovo account; gli MCP project-scoped (`.mcp.json` nel repo) funzionano ovunque.
-- **Se `claude-account` manca o è rotto, Claude parte comunque** sull'account di default: il wrapper non
-  fallisce mai di proposito.
+See [CONTRIBUTING.md](CONTRIBUTING.md). Run the tests with `sh test/run-tests.sh` — they build
+a throwaway `$HOME` and never touch your real accounts.
 
-## Portabilità
+## License
 
-POSIX sh: macOS e Linux. Su Linux `CLAUDE_CONFIG_DIR` isola le credenziali via
-`$CLAUDE_CONFIG_DIR/.credentials.json` invece del Keychain — meccanismo diverso, stesso risultato, ma non è
-stato verificato direttamente. Windows non è supportato.
-
-Verificato su macOS con Claude Code 2.1.199 (CLI) e 2.1.220 (estensione VS Code). Il meccanismo si appoggia a
-`claudeCode.claudeProcessWrapper`, un setting pubblico dell'estensione, e a `CLAUDE_CONFIG_DIR`, documentata:
-nessuna patch, nessun file dell'installazione di Claude viene toccato.
+[MIT](LICENSE).

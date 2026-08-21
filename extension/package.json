@@ -1,10 +1,25 @@
 {
   "name": "claude-account-switcher",
   "displayName": "Claude Account Switcher",
-  "description": "Mostra e cambia l'account Claude Code usato in questa finestra, come il branch git.",
+  "description": "Show and switch the Claude Code account used in this window, like the git branch.",
   "version": "0.2.0",
   "publisher": "francescofioredev",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/francescofioredev/claude-account-switcher.git"
+  },
+  "bugs": {
+    "url": "https://github.com/francescofioredev/claude-account-switcher/issues"
+  },
+  "homepage": "https://github.com/francescofioredev/claude-account-switcher#readme",
+  "keywords": [
+    "claude",
+    "claude code",
+    "account",
+    "switcher",
+    "status bar"
+  ],
   "engines": {
     "vscode": "^1.85.0"
   },
@@ -19,16 +34,16 @@
     "commands": [
       {
         "command": "claudeAccount.switch",
-        "title": "Claude Account: Cambia account per questo progetto"
+        "title": "Claude Account: Switch account for this project"
       },
       {
         "command": "claudeAccount.refresh",
-        "title": "Claude Account: Aggiorna",
+        "title": "Claude Account: Refresh",
         "icon": "$(refresh)"
       },
       {
         "command": "claudeAccount.showPanel",
-        "title": "Claude Account: Mostra il pannello account"
+        "title": "Claude Account: Show the accounts panel"
       }
     ],
     "viewsContainers": {
@@ -65,31 +80,37 @@
           "type": "string",
           "default": "",
           "scope": "machine",
-          "description": "Percorso dell'eseguibile claude-account. Se vuoto prova ~/.local/bin/claude-account e poi il PATH. Serve perché VS Code lanciato dal Dock ha un PATH ridotto."
+          "description": "Path to the claude-account executable. If empty, tries ~/.local/bin/claude-account and then the PATH. Needed because VS Code launched from the Dock has a reduced PATH."
         },
         "claudeAccount.statusBarPriority": {
           "type": "number",
           "default": 99,
           "scope": "machine",
-          "description": "Priorità dell'elemento nella status bar. Più alto = più a sinistra."
+          "description": "Priority of the status bar item. Higher = further left."
+        },
+        "claudeAccount.usageLive": {
+          "type": "boolean",
+          "default": false,
+          "scope": "machine",
+          "description": "Ask the API for real usage figures. Off by default: it sends the account's OAuth token, read from the Keychain, to api.anthropic.com. With it off the panel shows cached values from .claude.json, which can be hours old. See SECURITY.md."
         },
         "claudeAccount.usageStaleAfterMinutes": {
           "type": "number",
           "default": 360,
           "scope": "machine",
-          "description": "Dopo quanti minuti i consumi vengono segnalati come non aggiornati."
+          "description": "After how many minutes usage figures are flagged as out of date."
         },
         "claudeAccount.usageInTooltip": {
           "type": "boolean",
           "default": true,
           "scope": "machine",
-          "description": "Mostra una riga di consumi nel tooltip della status bar."
+          "description": "Show a usage line in the status bar tooltip."
         },
         "claudeAccount.usageRefreshMinutes": {
           "type": "number",
           "default": 10,
           "scope": "machine",
-          "description": "Ogni quanti minuti il pannello, se aperto, richiede i consumi all'API. 0 disattiva l'aggiornamento automatico."
+          "description": "How often, in minutes, the panel asks the API for usage while it is open. 0 disables automatic refresh. Only applies when claudeAccount.usageLive is on."
         }
       }
     }

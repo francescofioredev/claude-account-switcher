@@ -1,0 +1,16 @@
+name: tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run the test suite
+        run: sh test/run-tests.sh
+      - name: Check the extension parses
+        run: node --check extension/extension.js
