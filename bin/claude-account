@@ -1,18 +1,21 @@
 #!/bin/sh
-# claude-account — seleziona l'account Claude Code in base al progetto.
+# claude-account — pick the Claude Code account based on the project.
 #
-# Claude Code tiene un solo login per macchina, ma isola credenziali e stato per
-# CLAUDE_CONFIG_DIR: su macOS il servizio Keychain è "Claude Code-credentials"
-# quando la variabile non è settata, e "Claude Code-credentials-<sha256(dir)[0:8]>"
-# quando lo è. Più account possono quindi restare loggati insieme.
+# Claude Code keeps one login per machine, but isolates credentials and state per
+# CLAUDE_CONFIG_DIR: on macOS the Keychain service is "Claude Code-credentials"
+# when the variable is unset, and "Claude Code-credentials-<sha256(dir)[0:8]>"
+# when it is set. Several accounts can therefore stay logged in at once.
 #
-# Questo script è l'unica fonte di verità su "quale account per quale progetto".
-# Lo consultano il wrapper di VS Code, l'hook della shell e l'estensione.
+# This script is the single source of truth for "which account for which project".
+# The VS Code wrapper, the shell hook and the extension all consult it.
 #
-# set -u sì, set -e MAI: questo script sta sul percorso di avvio di Claude, un
-# errore qui deve degradare all'account di default, non impedire l'avvio.
+# set -u yes, set -e NEVER: this script sits on Claude's startup path, so an error
+# here must degrade to the default account, not stop Claude from launching.
 
 set -u
+
+VERSION=0.2.0
+REPO_URL="https://github.com/francescofioredev/claude-account-switcher"
 
 ACCOUNTS="$HOME/.claude-accounts"
 DEFAULT_DIR="$HOME/.claude"
@@ -20,11 +23,11 @@ CONF="${XDG_CONFIG_HOME:-$HOME/.config}/claude-account"
 ACCOUNTS_FILE="$CONF/accounts"
 OVERRIDES="$CONF/overrides"
 
-# File e cartelle di ~/.claude condivisi con ogni nuovo slot via symlink.
-# Fuori da qui resta tutto ciò che è specifico dell'account o volatile:
-# .claude.json, ide/, sessions/, session-env/, shell-snapshots/, file-history/,
-# history.jsonl, backups/, cache/, telemetry/.
-SHARED="CLAUDE.md settings.json settings.local.json skills agents commands plugins hooks get-shit-done gsd-file-manifest.json projects"
+# Files and directories of ~/.claude shared with every new slot via symlink.
+# Everything account-specific or volatile stays out: .claude.json, ide/,
+# sessions/, session-env/, shell-snapshots/, file-history/, history.jsonl,
+# backups/, cache/, telemetry/.
+SHARED="CLAUDE.md settings.json settings.local.json skills agents commands plugins hooks projects"
 
 ACCOUNT=default
 RESOLVED=
@@ -32,11 +35,11 @@ SOURCE=default
 
 die() { printf '%s\n' "$*" >&2; exit 1; }
 
-# Legge un file di una riga togliendo spazi e newline.
+# Read a one-line file, stripping spaces and newlines.
 read1() { tr -d ' \t\n\r' < "$1"; }
 
-# Stessa canonicalizzazione che l'estensione VS Code ottiene con realpathSync():
-# senza, lo slug scritto qui non combacerebbe con quello cercato da lei.
+# The same canonicalization the VS Code extension gets from realpathSync():
+# without it, the slug written here would not match the one it looks up.
 abspath() {
   if [ -d "$1" ]; then
     (cd "$1" 2>/dev/null && pwd -P) || printf '%s' "$1"
@@ -47,10 +50,10 @@ abspath() {
 
 slug_of() { printf '%s' "$1" | tr '/' '-'; }
 
-# Accetta un nome di account. 'default' è riservato e vale ~/.claude: serve per
-# poter forzare esplicitamente il default contro quanto dice la tabella.
-# Un nome che non corrisponde a nessuno slot fallisce e lascia proseguire la
-# risoluzione al livello successivo, invece di puntare a uno slot fantasma.
+# Accepts an account name. 'default' is reserved and means ~/.claude: it exists so
+# the default can be pinned explicitly against what the table says.
+# A name matching no slot fails and lets resolution continue to the next level,
+# rather than pointing at a ghost slot.
 try() {
   [ -n "${1:-}" ] || return 1
   case "$1" in .*|*/*) return 1 ;; esac
@@ -61,7 +64,7 @@ try() {
   ACCOUNT=$1; RESOLVED="$ACCOUNTS/$1"; SOURCE=$2; return 0
 }
 
-# Precedenza: override della UI > marker file nel repo > tabella > default.
+# Precedence: UI override > marker file in the repo > table > default.
 resolve() {
   d=$(abspath "${1:-$PWD}")
 
@@ -82,8 +85,8 @@ resolve() {
       case "$name" in ''|\#*) continue ;; esac
       [ -n "${prefix:-}" ] || continue
       case "$prefix" in "~"*) prefix="$HOME${prefix#\~}" ;; esac
-      # anche il prefisso va canonicalizzato: $d lo è già, e un symlink lungo il
-      # path (su macOS basta /var → /private/var) impedirebbe il match, in silenzio
+      # the prefix needs canonicalizing too: $d already is, and a symlink anywhere
+      # along the path (/var → /private/var on macOS) would silently block the match
       prefix=$(abspath "$prefix")
       case "$d" in "$prefix"|"$prefix"/*) try "$name" table && return 0 ;; esac
     done < "$ACCOUNTS_FILE"
@@ -93,29 +96,29 @@ resolve() {
   return 0
 }
 
-# La config dir di un account, incluso il default.
+# The config dir of an account, including the default.
 dir_of() {
   if [ "$1" = default ]; then printf '%s' "$DEFAULT_DIR"; else printf '%s' "$ACCOUNTS/$1"; fi
 }
 
-# Dove sta il .claude.json di un account. Attenzione all'asimmetria: per
-# l'account di default vive ACCANTO alla config dir (~/.claude.json), mentre con
-# CLAUDE_CONFIG_DIR impostata vive DENTRO la config dir (<dir>/.claude.json).
+# Where an account's .claude.json lives. Mind the asymmetry: for the default
+# account it sits BESIDE the config dir (~/.claude.json), while with
+# CLAUDE_CONFIG_DIR set it sits INSIDE it (<dir>/.claude.json).
 json_of() {
   if [ "$1" = default ]; then printf '%s' "$HOME/.claude.json"; else printf '%s' "$ACCOUNTS/$1/.claude.json"; fi
 }
 
-# L'email loggata in un account, letta dal .claude.json (nessuno spawn di
-# processo). Vuota se quell'account non ha mai fatto login.
+# The email logged in to an account, read from its .claude.json (no process
+# spawn). Empty if that account has never logged in.
 email_of() {
   f=$(json_of "$1")
   [ -f "$f" ] || return 0
   sed -n 's/.*"emailAddress"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$f" | head -1
 }
 
-# Il servizio Keychain di un account, dal percorso della sua config dir.
-# Vale solo per gli slot: il default usa "Claude Code-credentials" senza suffisso,
-# perché lì CLAUDE_CONFIG_DIR non è impostata affatto.
+# An account's Keychain service, derived from its config dir path.
+# Slots only: the default uses "Claude Code-credentials" with no suffix, because
+# there CLAUDE_CONFIG_DIR is not set at all.
 keychain_service_of() {
   if [ "$1" = default ]; then
     printf 'Claude Code-credentials'
@@ -125,10 +128,10 @@ keychain_service_of() {
   fi
 }
 
-# I campi di usage stanno annidati in .claude.json, che è pretty-printed: sed e awk
-# non bastano (un estrattore awk tronca resets_at sul "+00:00" e fa match parziale
-# di seven_day su seven_day_opus). Serve un parser vero: jq, o node come ripiego
-# perché su macOS 13/14 jq di sistema non c'è.
+# The usage fields are nested in .claude.json, which is pretty-printed: sed and awk
+# are not enough (an awk extractor truncates resets_at at the "+00:00" and matches
+# seven_day partially against seven_day_opus). This needs a real parser: jq, or node
+# as a fallback because macOS 13/14 ship no system jq.
 JSON=
 have_json() {
   [ -n "$JSON" ] && return 0
@@ -139,12 +142,12 @@ have_json() {
   return 1
 }
 
-# Emette le righe key=value dell'usage di un account leggendo il suo .claude.json.
-# Un campo assente resta vuoto: mai uno zero finto, che si leggerebbe come "non
-# ho consumato niente" invece che "non lo so".
-# $2, se passato, è la risposta live dell'endpoint: l'oggetto utilization NUDO,
-# mentre nella cache lo stesso oggetto sta sotto .cachedUsageUtilization.utilization.
-# L'identità (email, piano) viene comunque dal file: il live non la contiene.
+# Emit the key=value usage lines for an account by reading its .claude.json.
+# A missing field stays empty: never a fake zero, which would read as "nothing
+# used" rather than "unknown".
+# $2, if given, is the live endpoint response: the BARE utilization object, whereas
+# in the cache the same object sits under .cachedUsageUtilization.utilization.
+# Identity (email, plan) still comes from the file: the live response omits it.
 usage_fields() {
   f=$(json_of "$1")
   [ -f "$f" ] || return 0
@@ -181,8 +184,8 @@ usage_fields() {
       const x = u.extra_usage || {}, s = u.spend || {};
       const on = x.is_enabled === true;
       p("extra_enabled", on ? 1 : 0);
-      // spend.used.currency resta valorizzata anche a extra_usage spento, con tutti
-      // gli importi null: dedurre la presenza dalla valuta mostrerebbe una riga vuota.
+      // spend.used.currency stays set even with extra_usage off, with every amount
+      // null: inferring presence from the currency would show an empty row.
       p("spend_used_minor", on && s.used ? s.used.amount_minor : null);
       p("spend_limit_minor", on && s.limit ? s.limit.amount_minor : null);
       p("spend_currency", on && s.used ? s.used.currency : null);
@@ -231,15 +234,17 @@ _now_ms() {
   fi
 }
 
-# Chiede i consumi ad /api/oauth/usage, l'endpoint che usa Claude Code stesso.
-# Serve perché cachedUsageUtilization in .claude.json NON viene rinfrescato a ogni
-# sessione: campionato su questa macchina, il file veniva riscritto ogni 3 minuti
-# con il campo fermo da 15 ore. Senza questa chiamata il pannello mostra numeri di
-# ieri.
+# Asks /api/oauth/usage for current usage. Needed because cachedUsageUtilization in
+# .claude.json is NOT refreshed every session: when sampled, the file was rewritten
+# every few minutes while the field stayed put for hours. Without this call the
+# panel shows yesterday's numbers.
 #
-# È un endpoint interno e non documentato: se cambia, si degrada alla cache invece
-# di rompersi. Il token non lascia la macchina se non verso api.anthropic.com.
+# It is an internal, undocumented endpoint: if it changes, this degrades to the
+# cache instead of breaking. The token goes to api.anthropic.com and nowhere else.
 usage_live() {
+  # Opt-in: without explicit consent no network request is made and the token is
+  # not even read from the Keychain. Degrades to the cache.
+  [ "${CLAUDE_ACCOUNT_USAGE_LIVE:-0}" = 1 ] || return 1
   command -v curl >/dev/null 2>&1 || return 1
   have_json || return 1
 
@@ -248,11 +253,11 @@ usage_live() {
   tok=$(printf '%s' "$tok" | _json_get_token) || return 1
   [ -n "$tok" ] || return 1
 
-  # --max-time: sta dietro a un refresh di UI, non deve appendere la finestra.
+  # --max-time: this sits behind a UI refresh, it must not hang the window.
   body=$(curl -sS --max-time 8 \
     -H "Authorization: Bearer $tok" \
     -H "anthropic-beta: oauth-2025-04-20" \
-    -H "User-Agent: claude-cli (claude-account)" \
+    -H "User-Agent: claude-account/$VERSION (+$REPO_URL)" \
     https://api.anthropic.com/api/oauth/usage 2>/dev/null) || return 1
   [ -n "$body" ] || return 1
   printf '%s' "$body" | grep -q '"utilization"\|"five_hour"\|"limits"' || return 1
@@ -269,7 +274,7 @@ _json_get_token() {
   fi
 }
 
-# Gli override che nominano un dato account, uno per riga.
+# The overrides naming a given account, one per line.
 overrides_naming() {
   [ -d "$OVERRIDES" ] || return 0
   for f in "$OVERRIDES"/*; do
@@ -279,7 +284,7 @@ overrides_naming() {
   return 0
 }
 
-# Quante righe della tabella nominano un dato account.
+# How many table rows name a given account.
 table_rows_naming() {
   [ -f "$ACCOUNTS_FILE" ] || { printf '0'; return 0; }
   n=0
@@ -306,11 +311,11 @@ cmd_status() {
   printf 'email=%s\n' "$(email_of "$ACCOUNT")"
 }
 
-# list           tabella leggibile
-# list --porcelain   <nome>TAB<email>TAB<config_dir>TAB<json>TAB<loggato>TAB<keychain>,
-#                    per l'estensione: così sapere dove vive ogni .claude.json resta
-#                    compito di questo script soltanto. Le colonne si APPENDONO in
-#                    coda, mai si riordinano: l'estensione le destruttura per posizione.
+# list           human-readable table
+# list --porcelain   <name>TAB<email>TAB<config_dir>TAB<json>TAB<logged>TAB<keychain>,
+#                    for the extension: knowing where each .claude.json lives stays
+#                    this script's job alone. Columns are APPENDED at the end, never
+#                    reordered: the extension destructures them by position.
 cmd_list() {
   fmt=${1:-human}
   _row default "$fmt"
@@ -329,18 +334,18 @@ _row() {
     printf '%s\t%s\t%s\t%s\t%s\t%s\n' \
       "$1" "$email" "$(dir_of "$1")" "$(json_of "$1")" "$logged" "$(keychain_service_of "$1")"
   else
-    [ -n "$email" ] || email="(mai loggato)"
+    [ -n "$email" ] || email="(never logged in)"
     printf '%-14s %-38s %s\n' "$1" "$email" "$(dir_of "$1")"
   fi
 }
 
-# usage [--porcelain] [nome]
+# usage [--porcelain] [name]
 #
-# Record key=value separati da '---', uno per account. I dati vengono da
-# cachedUsageUtilization, che scrive Claude Code stesso: si aggiornano SOLO quando
-# Claude gira su quell'account, quindi fetched_at_ms va sempre mostrato a chi legge.
-# resets_at resta ISO grezzo: il date di BSD non parsa gli offset "+00:00", il
-# countdown si calcola a valle.
+# key=value records separated by '---', one per account. The data comes from
+# cachedUsageUtilization, written by Claude Code itself: it only updates when Claude
+# runs on that account, so fetched_at_ms must always be shown to the reader.
+# resets_at stays raw ISO: BSD date does not parse "+00:00" offsets, so the
+# countdown is computed downstream.
 cmd_usage() {
   fmt=human; who=; want_live=0
   for a in "$@"; do
@@ -352,7 +357,7 @@ cmd_usage() {
   done
 
   if [ -n "$who" ]; then
-    [ "$who" = default ] || [ -d "$ACCOUNTS/$who" ] || die "slot inesistente: $who"
+    [ "$who" = default ] || [ -d "$ACCOUNTS/$who" ] || die "no such account: $who"
     set -- "$who"
   else
     set -- default
@@ -367,8 +372,8 @@ cmd_usage() {
     email=$(email_of "$n")
     [ -n "$email" ] && logged=1 || logged=0
     live=
-    # se l'endpoint non risponde si ricade sulla cache: dato vecchio è meglio di
-    # nessun dato, purché resti etichettato come tale (live=0)
+    # if the endpoint does not answer we fall back to the cache: stale data beats no
+    # data, as long as it stays labelled as such (live=0)
     [ "$want_live" = 1 ] && [ "$logged" = 1 ] && live=$(usage_live "$n")
 
     if [ "$fmt" = --porcelain ]; then
@@ -386,7 +391,7 @@ cmd_usage() {
 
 _usage_human() {
   if [ "$2" = 0 ]; then
-    printf '%-14s (mai loggato)\n' "$1"
+    printf '%-14s (never logged in)\n' "$1"
     return 0
   fi
   u=$(usage_fields "$1" "${3:-}")
@@ -399,8 +404,8 @@ _usage_human() {
     printf '  %-3s %s %3s%%\n' "$lbl" "$(_bar "$p")" "$p"
   done
   ms=$(get fetched_at_ms)
-  if [ "$(get live)" = 1 ]; then printf '  aggiornato: adesso (live)\n'
-  elif [ -n "$ms" ]; then printf '  aggiornato: %s (cache)\n' "$(_age "$ms")"; fi
+  if [ "$(get live)" = 1 ]; then printf '  updated: just now (live)\n'
+  elif [ -n "$ms" ]; then printf '  updated: %s (cached)\n' "$(_age "$ms")"; fi
   return 0
 }
 
@@ -419,20 +424,20 @@ _age() {
   now=$(date +%s)
   then=$(( ${1:-0} / 1000 ))
   m=$(( (now - then) / 60 ))
-  if [ "$m" -lt 1 ]; then printf 'adesso'
-  elif [ "$m" -lt 60 ]; then printf '%s min fa' "$m"
-  elif [ "$m" -lt 1440 ]; then printf '%sh fa' "$((m / 60))"
-  elif [ "$m" -lt 2880 ]; then printf 'ieri'
-  else printf '%s giorni fa' "$((m / 1440))"; fi
+  if [ "$m" -lt 1 ]; then printf 'just now'
+  elif [ "$m" -lt 60 ]; then printf '%s min ago' "$m"
+  elif [ "$m" -lt 1440 ]; then printf '%sh ago' "$((m / 60))"
+  elif [ "$m" -lt 2880 ]; then printf 'yesterday'
+  else printf '%s days ago' "$((m / 1440))"; fi
 }
 
-# Stampa la riga di login di un account e nient'altro, così l'estensione incolla
-# testo scritto da qui invece di ricostruire percorsi per conto suo.
-# Per il default la variabile va OMESSA, non impostata a ~/.claude: impostarla
-# cambia il namespace Keychain (stessa regola del wrapper).
+# Print an account's login line and nothing else, so the extension pastes text
+# written here instead of rebuilding paths on its own.
+# For the default the variable must be OMITTED, not set to ~/.claude: setting it
+# changes the Keychain namespace (same rule as the wrapper).
 cmd_login_cmd() {
   name=${1:-default}
-  [ "$name" = default ] || [ -d "$ACCOUNTS/$name" ] || die "slot inesistente: $name"
+  [ "$name" = default ] || [ -d "$ACCOUNTS/$name" ] || die "no such account: $name"
   if [ "$name" = default ]; then
     printf 'claude auth login\n'
   else
@@ -442,8 +447,8 @@ cmd_login_cmd() {
 
 cmd_logout() {
   name=${1:-}
-  [ -n "$name" ] || die "uso: claude-account logout <nome|default>"
-  [ "$name" = default ] || [ -d "$ACCOUNTS/$name" ] || die "slot inesistente: $name"
+  [ -n "$name" ] || die "usage: claude-account logout <name|default>"
+  [ "$name" = default ] || [ -d "$ACCOUNTS/$name" ] || die "no such account: $name"
 
   if command -v claude >/dev/null 2>&1; then
     if [ "$name" = default ]; then
@@ -452,11 +457,11 @@ cmd_logout() {
       CLAUDE_CONFIG_DIR="$(dir_of "$name")" claude auth logout >/dev/null 2>&1
     fi
   fi
-  # Cintura: se claude non c'è o il logout non ha ripulito, la voce se ne va comunque.
+  # Belt and braces: if claude is missing or logout did not clean up, the entry goes anyway.
   security delete-generic-password -s "$(keychain_service_of "$name")" >/dev/null 2>&1
 
-  printf 'disconnesso %s\n' "$name"
-  printf 'per rientrare:\n  %s\n' "$(cmd_login_cmd "$name")"
+  printf 'logged out %s\n' "$name"
+  printf 'to log back in:\n  %s\n' "$(cmd_login_cmd "$name")"
 }
 
 cmd_rm() {
@@ -464,23 +469,23 @@ cmd_rm() {
   for a in "$@"; do
     case "$a" in --force) force=1 ;; *) name=$a ;; esac
   done
-  [ -n "$name" ] || die "uso: claude-account rm <nome> [--force]"
-  case "$name" in default) die "'default' non si elimina: è l'account in $DEFAULT_DIR" ;; esac
-  case "$name" in .*|*/*) die "nome non valido: $name" ;; esac
+  [ -n "$name" ] || die "usage: claude-account rm <name> [--force]"
+  case "$name" in default) die "'default' cannot be deleted: it is the account in $DEFAULT_DIR" ;; esac
+  case "$name" in .*|*/*) die "invalid name: $name" ;; esac
   dst="$ACCOUNTS/$name"
-  [ -d "$dst" ] || die "slot inesistente: $name"
+  [ -d "$dst" ] || die "no such account: $name"
 
-  # rm -rf non segue i symlink (unlink sulle voci, ricorsione solo nelle dir reali),
-  # quindi i target in ~/.claude sono al sicuro. Il rischio vero è chi ha copiato la
-  # config invece di symlinkarla: quei file sono unici e sparirebbero per sempre.
+  # rm -rf does not follow symlinks (it unlinks entries, recursing only into real
+  # dirs), so the targets in ~/.claude are safe. The real risk is config that was
+  # copied instead of symlinked: those files are unique and would be gone forever.
   real=
   for f in $SHARED; do
     [ -e "$dst/$f" ] && [ ! -L "$dst/$f" ] && real="$real $f"
   done
   if [ -n "$real" ] && [ "$force" = 0 ]; then
-    printf 'in %s ci sono copie reali (non symlink) di config condivisa:\n' "$dst" >&2
+    printf '%s holds real copies (not symlinks) of shared config:\n' "$dst" >&2
     for f in $real; do printf '  %s\n' "$f" >&2; done
-    die "eliminandolo andrebbero perse. Usa --force se è quello che vuoi."
+    die "deleting it would lose them. Use --force if that is what you want."
   fi
 
   svc=$(keychain_service_of "$name")
@@ -488,74 +493,74 @@ cmd_rm() {
   security find-generic-password -s "$svc" >/dev/null 2>&1 && had_key=1
   security delete-generic-password -s "$svc" >/dev/null 2>&1
 
-  rm -rf "$dst" || die "non riesco a rimuovere $dst"
-  printf 'rimosso %s\n' "$dst"
-  [ "$had_key" = 1 ] && printf 'credenziali Keychain rimosse (%s)\n' "$svc"
+  rm -rf "$dst" || die "cannot remove $dst"
+  printf 'removed %s\n' "$dst"
+  [ "$had_key" = 1 ] && printf 'Keychain credentials removed (%s)\n' "$svc"
 
   n=0
   for f in $(overrides_naming "$name"); do rm -f "$f"; n=$((n+1)); done
-  [ "$n" -gt 0 ] && printf "rimossi %s override che puntavano a '%s'\n" "$n" "$name"
+  [ "$n" -gt 0 ] && printf "removed %s overrides pointing at '%s'\n" "$n" "$name"
 
-  # La tabella è scritta a mano, con commenti e allineamento: si avvisa e basta.
-  # Non è un problema di correttezza, try() filtra sull'esistenza della dir e la
-  # risoluzione degrada al livello successivo.
+  # The table is hand-written, with comments and alignment: just warn about it.
+  # This is not a correctness problem — try() filters on the dir existing and
+  # resolution degrades to the next level.
   t=$(table_rows_naming "$name")
-  [ "$t" -gt 0 ] && printf "attenzione: %s righe in %s puntano ancora a '%s'\n" "$t" "$ACCOUNTS_FILE" "$name"
+  [ "$t" -gt 0 ] && printf "warning: %s rows in %s still point at '%s'\n" "$t" "$ACCOUNTS_FILE" "$name"
   return 0
 }
 
-# Rinominare sposta la config dir, e il servizio Keychain è sha256(dir)[0:8]: dopo
-# un mv le credenziali restano orfane e l'account risulta presente ma sloggato.
-# Meglio rimuoverle e dirlo, che lasciare all'utente un login fantasma.
+# Renaming moves the config dir, and the Keychain service is sha256(dir)[0:8]: after
+# a mv the credentials are orphaned and the account looks present but logged out.
+# Better to remove them and say so than to leave the user a ghost login.
 cmd_rename() {
   old=${1:-}; new=${2:-}
-  [ -n "$old" ] && [ -n "$new" ] || die "uso: claude-account rename <vecchio> <nuovo>"
-  case "$old" in default) die "'default' non si rinomina" ;; esac
-  case "$new" in default) die "'default' è riservato" ;; esac
-  case "$new" in .*|*/*) die "nome non valido: $new" ;; esac
-  [ -d "$ACCOUNTS/$old" ] || die "slot inesistente: $old"
-  [ -e "$ACCOUNTS/$new" ] && die "esiste già: $new"
+  [ -n "$old" ] && [ -n "$new" ] || die "usage: claude-account rename <old> <new>"
+  case "$old" in default) die "'default' cannot be renamed" ;; esac
+  case "$new" in default) die "'default' is reserved" ;; esac
+  case "$new" in .*|*/*) die "invalid name: $new" ;; esac
+  [ -d "$ACCOUNTS/$old" ] || die "no such account: $old"
+  [ -e "$ACCOUNTS/$new" ] && die "already exists: $new"
 
   svc=$(keychain_service_of "$old")
-  mv "$ACCOUNTS/$old" "$ACCOUNTS/$new" || die "non riesco a rinominare $old"
+  mv "$ACCOUNTS/$old" "$ACCOUNTS/$new" || die "cannot rename $old"
   security delete-generic-password -s "$svc" >/dev/null 2>&1
 
-  # Gli override sono file a singolo token scritti dalla macchina: riscriverli è sicuro.
+  # Overrides are single-token files written by the machine: rewriting them is safe.
   for f in $(overrides_naming "$old"); do printf '%s\n' "$new" > "$f"; done
 
-  printf 'rinominato %s → %s\n' "$old" "$new"
-  printf 'ATTENZIONE: le credenziali erano legate al vecchio percorso e sono state rimosse.\n'
-  printf 'Rifai il login:\n  %s\n' "$(cmd_login_cmd "$new")"
+  printf 'renamed %s → %s\n' "$old" "$new"
+  printf 'WARNING: credentials were tied to the old path and have been removed.\n'
+  printf 'Log in again:\n  %s\n' "$(cmd_login_cmd "$new")"
 
   t=$(table_rows_naming "$old")
-  [ "$t" -gt 0 ] && printf "attenzione: %s righe in %s puntano ancora a '%s'\n" "$t" "$ACCOUNTS_FILE" "$old"
+  [ "$t" -gt 0 ] && printf "warning: %s rows in %s still point at '%s'\n" "$t" "$ACCOUNTS_FILE" "$old"
   return 0
 }
 
 cmd_new() {
   name=${1:-}
-  [ -n "$name" ] || die "uso: claude-account new <nome>"
-  case "$name" in default) die "'default' è riservato: è l'account in $DEFAULT_DIR" ;; esac
-  case "$name" in .*|*/*) die "nome non valido: $name" ;; esac
-  [ -d "$DEFAULT_DIR" ] || die "non trovo $DEFAULT_DIR: Claude Code non è mai stato avviato?"
+  [ -n "$name" ] || die "usage: claude-account new <name>"
+  case "$name" in default) die "'default' is reserved: it is the account in $DEFAULT_DIR" ;; esac
+  case "$name" in .*|*/*) die "invalid name: $name" ;; esac
+  [ -d "$DEFAULT_DIR" ] || die "$DEFAULT_DIR not found: has Claude Code ever been started?"
 
   dst="$ACCOUNTS/$name"
-  mkdir -p "$dst" || die "non riesco a creare $dst"
+  mkdir -p "$dst" || die "cannot create $dst"
   for f in $SHARED; do
     [ -e "$DEFAULT_DIR/$f" ] || continue
     [ -e "$dst/$f" ] || [ -L "$dst/$f" ] || ln -s "$DEFAULT_DIR/$f" "$dst/$f"
   done
 
-  printf 'creato %s (config condivisa con %s via symlink)\n' "$dst" "$DEFAULT_DIR"
+  printf 'created %s (config shared with %s via symlinks)\n' "$dst" "$DEFAULT_DIR"
   printf 'ora fai il login:\n  CLAUDE_CONFIG_DIR=%s claude auth login\n' "$dst"
 }
 
 cmd_use() {
   name=${1:-}
-  [ -n "$name" ] || die "uso: claude-account use <nome|default> [path]"
-  [ "$name" = default ] || [ -d "$ACCOUNTS/$name" ] || die "slot inesistente: $name (vedi: claude-account list)"
+  [ -n "$name" ] || die "usage: claude-account use <name|default> [path]"
+  [ "$name" = default ] || [ -d "$ACCOUNTS/$name" ] || die "no such account: $name (see: claude-account list)"
   d=$(abspath "${2:-$PWD}")
-  mkdir -p "$OVERRIDES" || die "non riesco a creare $OVERRIDES"
+  mkdir -p "$OVERRIDES" || die "cannot create $OVERRIDES"
   printf '%s\n' "$name" > "$OVERRIDES/$(slug_of "$d")"
   printf '%s → %s\n' "$d" "$name"
 }
@@ -563,30 +568,33 @@ cmd_use() {
 cmd_clear() {
   d=$(abspath "${1:-$PWD}")
   rm -f "$OVERRIDES/$(slug_of "$d")"
-  printf '%s → default del progetto\n' "$d"
+  printf '%s → project default\n' "$d"
 }
 
 cmd_help() {
   cat <<EOF
-claude-account — un account Claude Code per progetto
+claude-account — one Claude Code account per project
 
-  resolve [path]        stampa la config dir da usare (vuoto = account di default)
+  resolve [path]        print the config dir to use (empty = default account)
   status  [path]        account / config_dir / source / path / email
-  list                  gli account disponibili e chi è loggato in ognuno
-  usage [--live] [nome] consumi (5h, 7 giorni, credito). --live li chiede all'API
-  new <nome>            crea lo slot ~/.claude-accounts/<nome>
-  use <nome|default> [path]   forza un account su quel progetto
-  clear [path]          rimuove il forzamento, torna al default del progetto
-  login-cmd <nome>      stampa la riga di login per quell'account
-  logout <nome>         disconnette l'account e ne rimuove le credenziali
-  rename <vecchio> <nuovo>    rinomina uno slot (richiede un nuovo login)
-  rm <nome> [--force]   elimina lo slot, le credenziali e i suoi override
+  list                  available accounts and who is logged in to each
+  usage [--live] [name] usage (5h, 7 days, credit). --live asks the API
+  new <name>            create the slot ~/.claude-accounts/<name>
+  use <name|default> [path]   pin an account to that project
+  clear [path]          remove the pin, back to the project default
+  login-cmd <name>      print the login line for that account
+  logout <name>         log the account out and remove its credentials
+  rename <old> <new>    rename a slot (requires logging in again)
+  rm <name> [--force]   delete the slot, its credentials and its overrides
 
-Precedenza: override (use) > file .claude-account nel repo > $ACCOUNTS_FILE > default.
+Precedence: override (use) > .claude-account file in the repo > $ACCOUNTS_FILE > default.
 
-Senza --live i consumi vengono dalla cache in .claude.json, che Claude Code rinfresca
-di rado: possono essere vecchi di giorni. Con --live li chiede all'API, leggendo il
-token dal Keychain; se non ci riesce ricade sulla cache.
+Without --live, usage comes from the cache in .claude.json, which Claude Code refreshes
+rarely: it can be days old. With --live it asks the API, reading the token from the
+Keychain; if that fails it falls back to the cache.
+
+--live is opt-in: it only makes a network request when CLAUDE_ACCOUNT_USAGE_LIVE=1.
+Otherwise it returns cached values. See SECURITY.md.
 EOF
 }
 
@@ -607,5 +615,5 @@ case "$cmd" in
   rename)        cmd_rename  "$@" ;;
   rm|delete)     cmd_rm      "$@" ;;
   help|-h|--help) cmd_help ;;
-  *)             die "comando sconosciuto: $cmd (prova: claude-account help)" ;;
+  *)             die "unknown command: $cmd (try: claude-account help)" ;;
 esac

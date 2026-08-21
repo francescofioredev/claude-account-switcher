@@ -75,7 +75,7 @@
         },
         "claudeAccount.usageStaleAfterMinutes": {
           "type": "number",
-          "default": 30,
+          "default": 360,
           "scope": "machine",
           "description": "Dopo quanti minuti i consumi vengono segnalati come non aggiornati."
         },

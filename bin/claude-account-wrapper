@@ -1,18 +1,18 @@
 #!/bin/sh
-# Wrapper per il setting VS Code "claudeCode.claudeProcessWrapper".
+# Wrapper for the VS Code setting "claudeCode.claudeProcessWrapper".
 #
-# L'estensione Claude Code lo invoca come:  claude-account-wrapper <binario-claude> <args...>
-# quindi qui basta impostare l'ambiente e fare exec di quello che ci è stato passato.
+# The Claude Code extension invokes it as:  claude-account-wrapper <claude-binary> <args...>
+# so all we do here is set the environment and exec whatever we were handed.
 #
-# Il cwd con cui l'estensione ci lancia è realpathSync(workspaceFolders[0]),
-# cioè la PRIMA cartella del .code-workspace nei workspace multi-root.
+# The cwd the extension launches us with is realpathSync(workspaceFolders[0]),
+# i.e. the FIRST folder of the .code-workspace in multi-root workspaces.
 #
-# Due regole non negoziabili:
-#  - nel ramo default CLAUDE_CONFIG_DIR va tolta dall'ambiente, non impostata al
-#    suo valore di default: settarla cambierebbe il namespace del Keychain e
-#    l'account di default risulterebbe sloggato;
-#  - nessun set -e e nessun errore fatale: se claude-account manca o è rotto,
-#    Claude deve comunque partire sull'account di default.
+# Two non-negotiable rules:
+#  - on the default branch CLAUDE_CONFIG_DIR must be removed from the environment,
+#    not set to its default value: setting it would change the Keychain namespace
+#    and the default account would appear logged out;
+#  - no set -e and no fatal errors: if claude-account is missing or broken, Claude
+#    must still start on the default account.
 
 dir=$("$(dirname "$0")/claude-account" resolve "$PWD" 2>/dev/null) || dir=
 

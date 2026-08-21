@@ -1,7 +1,7 @@
 #!/bin/sh
-# Installa claude-account: symlink in ~/.local/bin e config iniziale.
-# Symlink e non copia, così un `git pull` aggiorna tutto senza reinstallare —
-# per questo il repo deve restare dov'è.
+# Install claude-account: symlinks in ~/.local/bin plus initial config.
+# Symlinks rather than copies, so a `git pull` updates everything without
+# reinstalling — which is why the repo has to stay where it is.
 
 set -eu
 
@@ -16,29 +16,29 @@ ln -sf "$repo/bin/claude-account"         "$bin/claude-account"
 ln -sf "$repo/bin/claude-account-wrapper" "$bin/claude-account-wrapper"
 
 if [ -f "$conf/accounts" ]; then
-  printf 'config già presente, lasciata intatta: %s\n' "$conf/accounts"
+  printf 'config already present, left untouched: %s\n' "$conf/accounts"
 else
   cp "$repo/accounts.example" "$conf/accounts"
-  printf 'creata config: %s\n' "$conf/accounts"
+  printf 'created config: %s\n' "$conf/accounts"
 fi
 
-printf 'installati: %s/claude-account, %s/claude-account-wrapper\n\n' "$bin" "$bin"
+printf 'installed: %s/claude-account, %s/claude-account-wrapper\n\n' "$bin" "$bin"
 
 case ":$PATH:" in
   *":$bin:"*) ;;
-  *) printf 'ATTENZIONE: %s non è nel PATH, aggiungilo al tuo profilo.\n\n' "$bin" ;;
+  *) printf 'WARNING: %s is not on your PATH, add it to your profile.\n\n' "$bin" ;;
 esac
 
 cat <<EOF
-Restano due passi manuali:
+Two manual steps remain:
 
 1) VS Code — user settings (Cmd+Shift+P → "Preferences: Open User Settings (JSON)"):
      "claudeCode.claudeProcessWrapper": "$bin/claude-account-wrapper"
-   Va nelle user settings: è un setting machine-scoped, VS Code lo ignora se
-   messo nelle impostazioni di workspace.
+   It has to go in the user settings: it is a machine-scoped setting, and VS Code
+   ignores it in workspace settings.
 
-2) Shell — per il \`claude\` da terminale:
+2) Shell — for \`claude\` from a terminal:
      echo 'source $repo/shell/claude-account.zsh' >> ~/.zshrc
 
-Poi:  claude-account new <nome>  e  CLAUDE_CONFIG_DIR=\$HOME/.claude-accounts/<nome> claude auth login
+Then:  claude-account new <name>  and  CLAUDE_CONFIG_DIR=\$HOME/.claude-accounts/<name> claude auth login
 EOF

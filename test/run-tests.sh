@@ -27,31 +27,31 @@ chk() { # chk <descrizione> <atteso> <ottenuto>
 field() { printf '%s\n' "$1" | sed -n "s/^$2=//p"; }
 
 echo "--- 1. senza config: tutto default"
-chk "resolve vuoto"        ""        "$($CLI resolve "$HOME/proj/alpha")"
+chk "resolve empty"        ""        "$($CLI resolve "$HOME/proj/alpha")"
 s=$($CLI status "$HOME/proj/alpha")
 chk "status account"       "default" "$(field "$s" account)"
 chk "status source"        "default" "$(field "$s" source)"
 chk "status config_dir"    "$HOME/.claude" "$(field "$s" config_dir)"
 chk "status email"         "default@example.com" "$(field "$s" email)"
 
-echo "--- 2. path inesistente non rompe"
+echo "--- 2. nonexistent path non rompe"
 chk "resolve inesistente"  ""        "$($CLI resolve /tmp/nope-non-esiste)"
 chk "exit code"            "0"       "$($CLI resolve /tmp/nope-non-esiste >/dev/null 2>&1; echo $?)"
 
-echo "--- 3. new crea lo slot con i symlink"
+echo "--- 3. new creates the slot con i symlink"
 $CLI new lavoro >/dev/null 2>&1
-chk "slot creato"          "yes"     "$([ -d "$HOME/.claude-accounts/lavoro" ] && echo yes)"
+chk "slot created"          "yes"     "$([ -d "$HOME/.claude-accounts/lavoro" ] && echo yes)"
 chk "skills symlinkate"    "yes"     "$([ -L "$HOME/.claude-accounts/lavoro/skills" ] && echo yes)"
-chk "CLAUDE.md symlinkato" "yes"     "$([ -L "$HOME/.claude-accounts/lavoro/CLAUDE.md" ] && echo yes)"
-chk ".claude.json NON condiviso" ""  "$([ -e "$HOME/.claude-accounts/lavoro/.claude.json" ] && echo yes)"
-chk "slot senza login" "1" "$($CLI list | grep -c 'mai loggato')"
+chk "CLAUDE.md symlinked" "yes"     "$([ -L "$HOME/.claude-accounts/lavoro/CLAUDE.md" ] && echo yes)"
+chk ".claude.json NOT shared" ""  "$([ -e "$HOME/.claude-accounts/lavoro/.claude.json" ] && echo yes)"
+chk "slot with no login" "1" "$($CLI list | grep -c 'never logged in')"
 printf '{"oauthAccount":{"emailAddress":"lavoro@example.com"}}' > "$HOME/.claude-accounts/lavoro/.claude.json"
-chk "slot dopo il login"  "0" "$($CLI list | grep -c 'mai loggato')"
+chk "slot after login"  "0" "$($CLI list | grep -c 'never logged in')"
 $CLI new lavoro >/dev/null 2>&1
-chk "new idempotente"      "0"       "$?"
-chk "new default rifiutato" "1"      "$($CLI new default >/dev/null 2>&1; echo $?)"
+chk "new is idempotent"      "0"       "$?"
+chk "new default rejected" "1"      "$($CLI new default >/dev/null 2>&1; echo $?)"
 
-echo "--- 4. tabella accounts"
+echo "--- 4. accounts table"
 mkdir -p "$HOME/.config/claude-account"
 printf 'lavoro\t~/proj/alpha\n' > "$HOME/.config/claude-account/accounts"
 chk "match prefisso"       "$HOME/.claude-accounts/lavoro" "$($CLI resolve "$HOME/proj/alpha")"
@@ -72,9 +72,9 @@ $CLI use default "$HOME/proj/alpha" >/dev/null
 s=$($CLI status "$HOME/proj/alpha")
 chk "use default forza il default" "default" "$(field "$s" account)"
 chk "source=override"      "override" "$(field "$s" source)"
-chk "resolve vuoto"        ""        "$($CLI resolve "$HOME/proj/alpha")"
+chk "resolve empty"        ""        "$($CLI resolve "$HOME/proj/alpha")"
 $CLI clear "$HOME/proj/alpha" >/dev/null
-chk "clear ripristina"     "table"   "$(field "$($CLI status "$HOME/proj/alpha")" source)"
+chk "clear restores"     "table"   "$(field "$($CLI status "$HOME/proj/alpha")" source)"
 
 echo "--- 7. canonicalizzazione del path"
 $CLI use lavoro "$HOME/proj/beta" >/dev/null
@@ -180,7 +180,7 @@ chk "5h"                   "3"  "$(field "$u" five_hour_pct)"
 chk "7d"                   "14" "$(field "$u" seven_day_pct)"
 chk "resets_at integro (non troncato al +00:00)" \
     "2026-08-19T21:09:59.700950+00:00" "$(field "$u" five_hour_resets_at)"
-chk "seven_day non matcha seven_day_opus" "1" "$(printf '%s\n' "$u" | grep -c '^seven_day_pct=')"
+chk "seven_day does not match seven_day_opus" "1" "$(printf '%s\n' "$u" | grep -c '^seven_day_pct=')"
 chk "active_limit"         "weekly_all" "$(field "$u" active_limit)"
 chk "tier"                 "default_claude_max_20x" "$(field "$u" tier)"
 chk "extra attivo"         "1"   "$(field "$u" extra_enabled)"
@@ -198,10 +198,10 @@ chk "mai loggato: nessuna percentuale" ""  "$(field "$u" five_hour_pct)"
 
 chk "json corrotto non rompe"  "0" "$($CLI usage --porcelain rotto >/dev/null 2>&1; echo $?)"
 chk "json corrotto: nessun dato" ""  "$(field "$($CLI usage --porcelain rotto)" five_hour_pct)"
-chk "usage senza nome elenca tutti" "5" "$($CLI usage --porcelain | grep -c '^name=')"
+chk "usage with no name lists all" "5" "$($CLI usage --porcelain | grep -c '^name=')"
 chk "usage slot inesistente"   "1" "$($CLI usage --porcelain fantasma >/dev/null 2>&1; echo $?)"
 
-echo "--- 13. list --porcelain: colonne appese in coda"
+echo "--- 13. list --porcelain: columns appended at the end"
 l=$($CLI list --porcelain | head -1)
 chk "6 colonne"        "6" "$(printf '%s' "$l" | awk -F'\t' '{print NF}')"
 chk "colonna 1 invariata" "default" "$(printf '%s' "$l" | cut -f1)"
@@ -221,46 +221,46 @@ echo "--- 15. rename"
 chk "rename default rifiutato"    "1" "$($CLI rename default x >/dev/null 2>&1; echo $?)"
 chk "rename verso default rifiutato" "1" "$($CLI rename lavoro default >/dev/null 2>&1; echo $?)"
 chk "rename su nome esistente"    "1" "$($CLI rename lavoro noextra >/dev/null 2>&1; echo $?)"
-chk "rename inesistente"          "1" "$($CLI rename fantasma x >/dev/null 2>&1; echo $?)"
+chk "rename nonexistent"          "1" "$($CLI rename fantasma x >/dev/null 2>&1; echo $?)"
 $CLI use lavoro "$HOME/proj/beta" >/dev/null
 out=$($CLI rename lavoro ufficio 2>&1)
-chk "dir spostata"      "yes" "$([ -d "$HOME/.claude-accounts/ufficio" ] && echo yes)"
-chk "vecchia dir sparita" ""  "$([ -d "$HOME/.claude-accounts/lavoro" ] && echo yes)"
+chk "dir moved"      "yes" "$([ -d "$HOME/.claude-accounts/ufficio" ] && echo yes)"
+chk "old dir gone" ""  "$([ -d "$HOME/.claude-accounts/lavoro" ] && echo yes)"
 ovbeta="$HOME/.config/claude-account/overrides/$(cd "$HOME/proj/beta" && pwd -P | tr '/' '-')"
-chk "override riscritto" "ufficio" "$(cat "$ovbeta")"
-chk "avvisa del nuovo login" "1" "$(printf '%s\n' "$out" | grep -c 'Rifai il login')"
-chk "tabella non modificata dal rename" "2" "$(grep -c '^lavoro	' "$HOME/.config/claude-account/accounts")"
-chk "rename avvisa sulla tabella" "1" "$(printf '%s\n' "$out" | grep -c 'puntano ancora')"
+chk "override rewritten" "ufficio" "$(cat "$ovbeta")"
+chk "warns about logging in again" "1" "$(printf '%s\n' "$out" | grep -c 'Log in again')"
+chk "table untouched by rename" "2" "$(grep -c '^lavoro	' "$HOME/.config/claude-account/accounts")"
+chk "rename warns about the table" "1" "$(printf '%s\n' "$out" | grep -c 'still point at')"
 $CLI rename ufficio lavoro >/dev/null 2>&1
 
 echo "--- 16. rm"
-chk "rm default rifiutato" "1" "$($CLI rm default >/dev/null 2>&1; echo $?)"
-chk "rm inesistente"       "1" "$($CLI rm fantasma >/dev/null 2>&1; echo $?)"
+chk "rm default rejected" "1" "$($CLI rm default >/dev/null 2>&1; echo $?)"
+chk "rm nonexistent"       "1" "$($CLI rm fantasma >/dev/null 2>&1; echo $?)"
 # una copia reale al posto del symlink va protetta: quei file sono unici
 cp -R "$HOME/.claude/skills" "$HOME/.claude-accounts/noextra/skills-tmp"
 rm "$HOME/.claude-accounts/noextra/skills" && mv "$HOME/.claude-accounts/noextra/skills-tmp" "$HOME/.claude-accounts/noextra/skills"
-chk "rifiuta se c'è config copiata, non symlinkata" "1" "$($CLI rm noextra >/dev/null 2>&1; echo $?)"
-chk "--force passa"        "0" "$($CLI rm noextra --force >/dev/null 2>&1; echo $?)"
+chk "refuses when config is copied, not symlinked" "1" "$($CLI rm noextra >/dev/null 2>&1; echo $?)"
+chk "--force goes through"        "0" "$($CLI rm noextra --force >/dev/null 2>&1; echo $?)"
 
 $CLI use lavoro "$HOME/proj/beta" >/dev/null
 $CLI rm lavoro >/dev/null 2>&1
-chk "slot rimosso"      ""  "$([ -d "$HOME/.claude-accounts/lavoro" ] && echo yes)"
-chk "override ripulito" ""  "$([ -f "$ovbeta" ] && echo yes)"
+chk "slot removed"      ""  "$([ -d "$HOME/.claude-accounts/lavoro" ] && echo yes)"
+chk "override cleaned up" ""  "$([ -f "$ovbeta" ] && echo yes)"
 # le due asserzioni portanti: rm -rf non deve seguire i symlink verso ~/.claude
-chk "target del symlink intatto" "istruzioni" "$(cat "$HOME/.claude/CLAUDE.md")"
-chk "~/.claude sopravvive"       "yes" "$([ -d "$HOME/.claude" ] && echo yes)"
-chk "skills del default intatte" "yes" "$([ -d "$HOME/.claude/skills" ] && echo yes)"
+chk "symlink target intact" "istruzioni" "$(cat "$HOME/.claude/CLAUDE.md")"
+chk "~/.claude survives"       "yes" "$([ -d "$HOME/.claude" ] && echo yes)"
+chk "default skills intact" "yes" "$([ -d "$HOME/.claude/skills" ] && echo yes)"
 
-echo "--- 17. --live degrada alla cache"
+echo "--- 17. --live degrades to the cache"
 # nella HOME finta non c'è nessuna voce Keychain: --live deve ricadere sulla cache
 # senza errori e senza spacciare il dato per fresco
 u=$($CLI usage --live --porcelain default)
-chk "--live senza credenziali: exit 0" "0" "$($CLI usage --live --porcelain default >/dev/null 2>&1; echo $?)"
-chk "--live marcato come cache"  "0"  "$(field "$u" live)"
-chk "--live conserva i dati in cache" "3" "$(field "$u" five_hour_pct)"
+chk "--live with no credentials: exit 0" "0" "$($CLI usage --live --porcelain default >/dev/null 2>&1; echo $?)"
+chk "--live marked as cached"  "0"  "$(field "$u" live)"
+chk "--live keeps the cached data" "3" "$(field "$u" five_hour_pct)"
 chk "cache: live=0"              "0"  "$(field "$($CLI usage --porcelain default)" live)"
-chk "--live su mai loggato"      "0"  "$($CLI usage --live --porcelain mailoggato >/dev/null 2>&1; echo $?)"
+chk "--live on never-logged-in"      "0"  "$($CLI usage --live --porcelain mailoggato >/dev/null 2>&1; echo $?)"
 
-printf '\n%s passati, %s falliti\n' "$pass" "$fail"
+printf '\n%s passed, %s failed\n' "$pass" "$fail"
 rm -rf "$T"
 [ "$fail" -eq 0 ]

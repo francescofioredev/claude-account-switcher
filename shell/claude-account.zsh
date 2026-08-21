@@ -1,11 +1,11 @@
-# Hook zsh per claude-account: tiene CLAUDE_CONFIG_DIR allineata alla cartella corrente.
+# zsh hook for claude-account: keeps CLAUDE_CONFIG_DIR aligned with the current directory.
 #
-# Serve al `claude` lanciato da terminale. Il terminale integrato di VS Code
-# eredita l'ambiente dell'editor, dove CLAUDE_CONFIG_DIR non è impostata: senza
-# questo hook, `claude` da terminale userebbe l'account di default anche dentro
-# un progetto mappato su un altro account.
+# This is for `claude` launched from a terminal. VS Code's integrated terminal
+# inherits the editor's environment, where CLAUDE_CONFIG_DIR is unset: without
+# this hook, `claude` from a terminal would use the default account even inside a
+# project mapped to another one.
 #
-# Installazione:  echo 'source /percorso/del/repo/shell/claude-account.zsh' >> ~/.zshrc
+# Install with:  echo 'source /path/to/repo/shell/claude-account.zsh' >> ~/.zshrc
 
 _claude_account_sync() {
   local dir
@@ -13,7 +13,7 @@ _claude_account_sync() {
   if [[ -n $dir ]]; then
     export CLAUDE_CONFIG_DIR="$dir"
   else
-    # unset e non "=default": settarla cambierebbe il namespace del Keychain
+    # unset, not "=default": setting it would change the Keychain namespace
     unset CLAUDE_CONFIG_DIR
   fi
 }
