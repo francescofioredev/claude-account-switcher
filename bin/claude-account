@@ -113,6 +113,183 @@ email_of() {
   sed -n 's/.*"emailAddress"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$f" | head -1
 }
 
+# Il servizio Keychain di un account, dal percorso della sua config dir.
+# Vale solo per gli slot: il default usa "Claude Code-credentials" senza suffisso,
+# perché lì CLAUDE_CONFIG_DIR non è impostata affatto.
+keychain_service_of() {
+  if [ "$1" = default ]; then
+    printf 'Claude Code-credentials'
+  else
+    printf 'Claude Code-credentials-%s' \
+      "$(printf '%s' "$(dir_of "$1")" | shasum -a 256 | cut -c1-8)"
+  fi
+}
+
+# I campi di usage stanno annidati in .claude.json, che è pretty-printed: sed e awk
+# non bastano (un estrattore awk tronca resets_at sul "+00:00" e fa match parziale
+# di seven_day su seven_day_opus). Serve un parser vero: jq, o node come ripiego
+# perché su macOS 13/14 jq di sistema non c'è.
+JSON=
+have_json() {
+  [ -n "$JSON" ] && return 0
+  for c in /usr/bin/jq jq; do
+    command -v "$c" >/dev/null 2>&1 && { JSON=$c; return 0; }
+  done
+  command -v node >/dev/null 2>&1 && { JSON=node; return 0; }
+  return 1
+}
+
+# Emette le righe key=value dell'usage di un account leggendo il suo .claude.json.
+# Un campo assente resta vuoto: mai uno zero finto, che si leggerebbe come "non
+# ho consumato niente" invece che "non lo so".
+# $2, se passato, è la risposta live dell'endpoint: l'oggetto utilization NUDO,
+# mentre nella cache lo stesso oggetto sta sotto .cachedUsageUtilization.utilization.
+# L'identità (email, piano) viene comunque dal file: il live non la contiene.
+usage_fields() {
+  f=$(json_of "$1")
+  [ -f "$f" ] || return 0
+  have_json || return 0
+
+  live=${2:-}
+  lf=
+  if [ -n "$live" ]; then
+    lf=$(mktemp) || return 0
+    printf '%s' "$live" > "$lf"
+  fi
+
+  if [ "$JSON" = node ]; then
+    node -e '
+      const fs = require("fs");
+      let d; try { d = JSON.parse(fs.readFileSync(process.argv[1], "utf8")); } catch { d = {}; }
+      let L = null;
+      if (process.argv[2]) { try { L = JSON.parse(fs.readFileSync(process.argv[2], "utf8")); } catch {} }
+      const o = d.oauthAccount || {}, c = d.cachedUsageUtilization || {};
+      const u = L ? (L.utilization || L) : (c.utilization || {});
+      const p = (k, v) => { if (v !== undefined && v !== null) console.log(k + "=" + v); else console.log(k + "="); };
+      // le percentuali arrivano float dall API (2.0) e intere dalla cache
+      const r = (v) => (v == null ? null : Math.round(Number(v)));
+      p("email", o.emailAddress); p("display_name", o.displayName); p("org_name", o.organizationName);
+      p("plan", o.organizationType); p("tier", o.organizationRateLimitTier);
+      p("fetched_at_ms", L ? Date.now() : c.fetchedAtMs);
+      p("live", L ? 1 : 0);
+      for (const n of ["five_hour", "seven_day"]) {
+        const w = u[n] || {};
+        p(n + "_pct", r(w.utilization)); p(n + "_resets_at", w.resets_at);
+      }
+      const act = (u.limits || []).find((l) => l.is_active);
+      p("active_limit", act && act.kind);
+      const x = u.extra_usage || {}, s = u.spend || {};
+      const on = x.is_enabled === true;
+      p("extra_enabled", on ? 1 : 0);
+      // spend.used.currency resta valorizzata anche a extra_usage spento, con tutti
+      // gli importi null: dedurre la presenza dalla valuta mostrerebbe una riga vuota.
+      p("spend_used_minor", on && s.used ? s.used.amount_minor : null);
+      p("spend_limit_minor", on && s.limit ? s.limit.amount_minor : null);
+      p("spend_currency", on && s.used ? s.used.currency : null);
+      p("spend_exponent", on && s.used ? s.used.exponent : null);
+      p("spend_pct", on ? r(s.percent) : null);
+    ' "$f" "$lf" 2>/dev/null
+    [ -n "$lf" ] && rm -f "$lf"
+    return 0
+  fi
+
+  "$JSON" -r --arg now "$(_now_ms)" --slurpfile L "${lf:-/dev/null}" '
+    def s: if . == null then "" else tostring end;
+    def r: if . == null then "" else (tonumber | round | tostring) end;
+    ($L[0] // null) as $lv
+    | .oauthAccount as $o | (.cachedUsageUtilization // {}) as $c
+    | (if $lv then ($lv.utilization // $lv) else ($c.utilization // {}) end) as $u
+    | (($u.extra_usage // {}).is_enabled == true) as $on | ($u.spend // {}) as $sp
+    | "email=\(($o.emailAddress) | s)",
+      "display_name=\(($o.displayName) | s)",
+      "org_name=\(($o.organizationName) | s)",
+      "plan=\(($o.organizationType) | s)",
+      "tier=\(($o.organizationRateLimitTier) | s)",
+      "fetched_at_ms=\(if $lv then $now else ($c.fetchedAtMs | s) end)",
+      "live=\(if $lv then 1 else 0 end)",
+      "five_hour_pct=\((($u.five_hour // {}).utilization) | r)",
+      "five_hour_resets_at=\((($u.five_hour // {}).resets_at) | s)",
+      "seven_day_pct=\((($u.seven_day // {}).utilization) | r)",
+      "seven_day_resets_at=\((($u.seven_day // {}).resets_at) | s)",
+      "active_limit=\([($u.limits // [])[] | select(.is_active)][0].kind | s)",
+      "extra_enabled=\(if $on then 1 else 0 end)",
+      "spend_used_minor=\(if $on then ($sp.used.amount_minor | s) else "" end)",
+      "spend_limit_minor=\(if $on then ($sp.limit.amount_minor | s) else "" end)",
+      "spend_currency=\(if $on then ($sp.used.currency | s) else "" end)",
+      "spend_exponent=\(if $on then ($sp.used.exponent | s) else "" end)",
+      "spend_pct=\(if $on then ($sp.percent | r) else "" end)"
+  ' "$f" 2>/dev/null
+  [ -n "$lf" ] && rm -f "$lf"
+  return 0
+}
+
+_now_ms() {
+  if command -v python3 >/dev/null 2>&1; then
+    python3 -c 'import time;print(int(time.time()*1000))'
+  else
+    printf '%s000' "$(date +%s)"
+  fi
+}
+
+# Chiede i consumi ad /api/oauth/usage, l'endpoint che usa Claude Code stesso.
+# Serve perché cachedUsageUtilization in .claude.json NON viene rinfrescato a ogni
+# sessione: campionato su questa macchina, il file veniva riscritto ogni 3 minuti
+# con il campo fermo da 15 ore. Senza questa chiamata il pannello mostra numeri di
+# ieri.
+#
+# È un endpoint interno e non documentato: se cambia, si degrada alla cache invece
+# di rompersi. Il token non lascia la macchina se non verso api.anthropic.com.
+usage_live() {
+  command -v curl >/dev/null 2>&1 || return 1
+  have_json || return 1
+
+  tok=$(security find-generic-password -s "$(keychain_service_of "$1")" -w 2>/dev/null) || return 1
+  [ -n "$tok" ] || return 1
+  tok=$(printf '%s' "$tok" | _json_get_token) || return 1
+  [ -n "$tok" ] || return 1
+
+  # --max-time: sta dietro a un refresh di UI, non deve appendere la finestra.
+  body=$(curl -sS --max-time 8 \
+    -H "Authorization: Bearer $tok" \
+    -H "anthropic-beta: oauth-2025-04-20" \
+    -H "User-Agent: claude-cli (claude-account)" \
+    https://api.anthropic.com/api/oauth/usage 2>/dev/null) || return 1
+  [ -n "$body" ] || return 1
+  printf '%s' "$body" | grep -q '"utilization"\|"five_hour"\|"limits"' || return 1
+  printf '%s' "$body"
+}
+
+_json_get_token() {
+  if [ "$JSON" = node ]; then
+    node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{
+      try { process.stdout.write((JSON.parse(s).claudeAiOauth||{}).accessToken||""); } catch {}
+    })'
+  else
+    "$JSON" -r '.claudeAiOauth.accessToken // empty' 2>/dev/null
+  fi
+}
+
+# Gli override che nominano un dato account, uno per riga.
+overrides_naming() {
+  [ -d "$OVERRIDES" ] || return 0
+  for f in "$OVERRIDES"/*; do
+    [ -f "$f" ] || continue
+    [ "$(read1 "$f")" = "$1" ] && printf '%s\n' "$f"
+  done
+  return 0
+}
+
+# Quante righe della tabella nominano un dato account.
+table_rows_naming() {
+  [ -f "$ACCOUNTS_FILE" ] || { printf '0'; return 0; }
+  n=0
+  while read -r name _; do
+    case "$name" in ''|\#*) continue ;; esac
+    [ "$name" = "$1" ] && n=$((n+1))
+  done < "$ACCOUNTS_FILE"
+  printf '%s' "$n"
+}
+
 cmd_resolve() {
   resolve "${1:-}"
   [ -n "$RESOLVED" ] && printf '%s\n' "$RESOLVED"
@@ -130,9 +307,10 @@ cmd_status() {
 }
 
 # list           tabella leggibile
-# list --porcelain   <nome>TAB<email>TAB<config_dir>TAB<json>, per l'estensione:
-#                    così sapere dove vive ogni .claude.json resta compito di
-#                    questo script soltanto
+# list --porcelain   <nome>TAB<email>TAB<config_dir>TAB<json>TAB<loggato>TAB<keychain>,
+#                    per l'estensione: così sapere dove vive ogni .claude.json resta
+#                    compito di questo script soltanto. Le colonne si APPENDONO in
+#                    coda, mai si riordinano: l'estensione le destruttura per posizione.
 cmd_list() {
   fmt=${1:-human}
   _row default "$fmt"
@@ -147,11 +325,211 @@ cmd_list() {
 _row() {
   email=$(email_of "$1")
   if [ "${2:-human}" = "--porcelain" ]; then
-    printf '%s\t%s\t%s\t%s\n' "$1" "$email" "$(dir_of "$1")" "$(json_of "$1")"
+    [ -n "$email" ] && logged=1 || logged=0
+    printf '%s\t%s\t%s\t%s\t%s\t%s\n' \
+      "$1" "$email" "$(dir_of "$1")" "$(json_of "$1")" "$logged" "$(keychain_service_of "$1")"
   else
     [ -n "$email" ] || email="(mai loggato)"
     printf '%-14s %-38s %s\n' "$1" "$email" "$(dir_of "$1")"
   fi
+}
+
+# usage [--porcelain] [nome]
+#
+# Record key=value separati da '---', uno per account. I dati vengono da
+# cachedUsageUtilization, che scrive Claude Code stesso: si aggiornano SOLO quando
+# Claude gira su quell'account, quindi fetched_at_ms va sempre mostrato a chi legge.
+# resets_at resta ISO grezzo: il date di BSD non parsa gli offset "+00:00", il
+# countdown si calcola a valle.
+cmd_usage() {
+  fmt=human; who=; want_live=0
+  for a in "$@"; do
+    case "$a" in
+      --porcelain) fmt=--porcelain ;;
+      --live) want_live=1 ;;
+      *) who=$a ;;
+    esac
+  done
+
+  if [ -n "$who" ]; then
+    [ "$who" = default ] || [ -d "$ACCOUNTS/$who" ] || die "slot inesistente: $who"
+    set -- "$who"
+  else
+    set -- default
+    if [ -d "$ACCOUNTS" ]; then
+      for d in "$ACCOUNTS"/*; do
+        [ -d "$d" ] && set -- "$@" "$(basename "$d")"
+      done
+    fi
+  fi
+
+  for n in "$@"; do
+    email=$(email_of "$n")
+    [ -n "$email" ] && logged=1 || logged=0
+    live=
+    # se l'endpoint non risponde si ricade sulla cache: dato vecchio è meglio di
+    # nessun dato, purché resti etichettato come tale (live=0)
+    [ "$want_live" = 1 ] && [ "$logged" = 1 ] && live=$(usage_live "$n")
+
+    if [ "$fmt" = --porcelain ]; then
+      printf 'name=%s\n' "$n"
+      printf 'config_dir=%s\n' "$(dir_of "$n")"
+      printf 'logged_in=%s\n' "$logged"
+      if [ "$logged" = 1 ]; then usage_fields "$n" "$live"; else printf 'email=\n'; fi
+      printf -- '---\n'
+    else
+      _usage_human "$n" "$logged" "$live"
+    fi
+  done
+  return 0
+}
+
+_usage_human() {
+  if [ "$2" = 0 ]; then
+    printf '%-14s (mai loggato)\n' "$1"
+    return 0
+  fi
+  u=$(usage_fields "$1" "${3:-}")
+  get() { printf '%s\n' "$u" | sed -n "s/^$1=//p" | head -1; }
+  printf '%-14s %s\n' "$1" "$(get email)"
+  for w in five_hour:5h seven_day:7d; do
+    k=${w%%:*}; lbl=${w##*:}
+    p=$(get "${k}_pct")
+    [ -n "$p" ] || continue
+    printf '  %-3s %s %3s%%\n' "$lbl" "$(_bar "$p")" "$p"
+  done
+  ms=$(get fetched_at_ms)
+  if [ "$(get live)" = 1 ]; then printf '  aggiornato: adesso (live)\n'
+  elif [ -n "$ms" ]; then printf '  aggiornato: %s (cache)\n' "$(_age "$ms")"; fi
+  return 0
+}
+
+_bar() {
+  n=$(( ${1:-0} / 5 ))
+  [ "$n" -gt 20 ] && n=20
+  i=0; out=
+  while [ "$i" -lt 20 ]; do
+    [ "$i" -lt "$n" ] && out="$out#" || out="$out."
+    i=$((i+1))
+  done
+  printf '%s' "$out"
+}
+
+_age() {
+  now=$(date +%s)
+  then=$(( ${1:-0} / 1000 ))
+  m=$(( (now - then) / 60 ))
+  if [ "$m" -lt 1 ]; then printf 'adesso'
+  elif [ "$m" -lt 60 ]; then printf '%s min fa' "$m"
+  elif [ "$m" -lt 1440 ]; then printf '%sh fa' "$((m / 60))"
+  elif [ "$m" -lt 2880 ]; then printf 'ieri'
+  else printf '%s giorni fa' "$((m / 1440))"; fi
+}
+
+# Stampa la riga di login di un account e nient'altro, così l'estensione incolla
+# testo scritto da qui invece di ricostruire percorsi per conto suo.
+# Per il default la variabile va OMESSA, non impostata a ~/.claude: impostarla
+# cambia il namespace Keychain (stessa regola del wrapper).
+cmd_login_cmd() {
+  name=${1:-default}
+  [ "$name" = default ] || [ -d "$ACCOUNTS/$name" ] || die "slot inesistente: $name"
+  if [ "$name" = default ]; then
+    printf 'claude auth login\n'
+  else
+    printf 'CLAUDE_CONFIG_DIR=%s claude auth login\n' "$(dir_of "$name")"
+  fi
+}
+
+cmd_logout() {
+  name=${1:-}
+  [ -n "$name" ] || die "uso: claude-account logout <nome|default>"
+  [ "$name" = default ] || [ -d "$ACCOUNTS/$name" ] || die "slot inesistente: $name"
+
+  if command -v claude >/dev/null 2>&1; then
+    if [ "$name" = default ]; then
+      claude auth logout >/dev/null 2>&1
+    else
+      CLAUDE_CONFIG_DIR="$(dir_of "$name")" claude auth logout >/dev/null 2>&1
+    fi
+  fi
+  # Cintura: se claude non c'è o il logout non ha ripulito, la voce se ne va comunque.
+  security delete-generic-password -s "$(keychain_service_of "$name")" >/dev/null 2>&1
+
+  printf 'disconnesso %s\n' "$name"
+  printf 'per rientrare:\n  %s\n' "$(cmd_login_cmd "$name")"
+}
+
+cmd_rm() {
+  name=; force=0
+  for a in "$@"; do
+    case "$a" in --force) force=1 ;; *) name=$a ;; esac
+  done
+  [ -n "$name" ] || die "uso: claude-account rm <nome> [--force]"
+  case "$name" in default) die "'default' non si elimina: è l'account in $DEFAULT_DIR" ;; esac
+  case "$name" in .*|*/*) die "nome non valido: $name" ;; esac
+  dst="$ACCOUNTS/$name"
+  [ -d "$dst" ] || die "slot inesistente: $name"
+
+  # rm -rf non segue i symlink (unlink sulle voci, ricorsione solo nelle dir reali),
+  # quindi i target in ~/.claude sono al sicuro. Il rischio vero è chi ha copiato la
+  # config invece di symlinkarla: quei file sono unici e sparirebbero per sempre.
+  real=
+  for f in $SHARED; do
+    [ -e "$dst/$f" ] && [ ! -L "$dst/$f" ] && real="$real $f"
+  done
+  if [ -n "$real" ] && [ "$force" = 0 ]; then
+    printf 'in %s ci sono copie reali (non symlink) di config condivisa:\n' "$dst" >&2
+    for f in $real; do printf '  %s\n' "$f" >&2; done
+    die "eliminandolo andrebbero perse. Usa --force se è quello che vuoi."
+  fi
+
+  svc=$(keychain_service_of "$name")
+  had_key=0
+  security find-generic-password -s "$svc" >/dev/null 2>&1 && had_key=1
+  security delete-generic-password -s "$svc" >/dev/null 2>&1
+
+  rm -rf "$dst" || die "non riesco a rimuovere $dst"
+  printf 'rimosso %s\n' "$dst"
+  [ "$had_key" = 1 ] && printf 'credenziali Keychain rimosse (%s)\n' "$svc"
+
+  n=0
+  for f in $(overrides_naming "$name"); do rm -f "$f"; n=$((n+1)); done
+  [ "$n" -gt 0 ] && printf "rimossi %s override che puntavano a '%s'\n" "$n" "$name"
+
+  # La tabella è scritta a mano, con commenti e allineamento: si avvisa e basta.
+  # Non è un problema di correttezza, try() filtra sull'esistenza della dir e la
+  # risoluzione degrada al livello successivo.
+  t=$(table_rows_naming "$name")
+  [ "$t" -gt 0 ] && printf "attenzione: %s righe in %s puntano ancora a '%s'\n" "$t" "$ACCOUNTS_FILE" "$name"
+  return 0
+}
+
+# Rinominare sposta la config dir, e il servizio Keychain è sha256(dir)[0:8]: dopo
+# un mv le credenziali restano orfane e l'account risulta presente ma sloggato.
+# Meglio rimuoverle e dirlo, che lasciare all'utente un login fantasma.
+cmd_rename() {
+  old=${1:-}; new=${2:-}
+  [ -n "$old" ] && [ -n "$new" ] || die "uso: claude-account rename <vecchio> <nuovo>"
+  case "$old" in default) die "'default' non si rinomina" ;; esac
+  case "$new" in default) die "'default' è riservato" ;; esac
+  case "$new" in .*|*/*) die "nome non valido: $new" ;; esac
+  [ -d "$ACCOUNTS/$old" ] || die "slot inesistente: $old"
+  [ -e "$ACCOUNTS/$new" ] && die "esiste già: $new"
+
+  svc=$(keychain_service_of "$old")
+  mv "$ACCOUNTS/$old" "$ACCOUNTS/$new" || die "non riesco a rinominare $old"
+  security delete-generic-password -s "$svc" >/dev/null 2>&1
+
+  # Gli override sono file a singolo token scritti dalla macchina: riscriverli è sicuro.
+  for f in $(overrides_naming "$old"); do printf '%s\n' "$new" > "$f"; done
+
+  printf 'rinominato %s → %s\n' "$old" "$new"
+  printf 'ATTENZIONE: le credenziali erano legate al vecchio percorso e sono state rimosse.\n'
+  printf 'Rifai il login:\n  %s\n' "$(cmd_login_cmd "$new")"
+
+  t=$(table_rows_naming "$old")
+  [ "$t" -gt 0 ] && printf "attenzione: %s righe in %s puntano ancora a '%s'\n" "$t" "$ACCOUNTS_FILE" "$old"
+  return 0
 }
 
 cmd_new() {
@@ -195,11 +573,20 @@ claude-account — un account Claude Code per progetto
   resolve [path]        stampa la config dir da usare (vuoto = account di default)
   status  [path]        account / config_dir / source / path / email
   list                  gli account disponibili e chi è loggato in ognuno
+  usage [--live] [nome] consumi (5h, 7 giorni, credito). --live li chiede all'API
   new <nome>            crea lo slot ~/.claude-accounts/<nome>
   use <nome|default> [path]   forza un account su quel progetto
   clear [path]          rimuove il forzamento, torna al default del progetto
+  login-cmd <nome>      stampa la riga di login per quell'account
+  logout <nome>         disconnette l'account e ne rimuove le credenziali
+  rename <vecchio> <nuovo>    rinomina uno slot (richiede un nuovo login)
+  rm <nome> [--force]   elimina lo slot, le credenziali e i suoi override
 
 Precedenza: override (use) > file .claude-account nel repo > $ACCOUNTS_FILE > default.
+
+Senza --live i consumi vengono dalla cache in .claude.json, che Claude Code rinfresca
+di rado: possono essere vecchi di giorni. Con --live li chiede all'API, leggendo il
+token dal Keychain; se non ci riesce ricade sulla cache.
 EOF
 }
 
@@ -211,9 +598,14 @@ case "$cmd" in
   resolve)       cmd_resolve "$@" ;;
   status)        cmd_status  "$@" ;;
   list)          cmd_list    "$@" ;;
+  usage)         cmd_usage   "$@" ;;
   new)           cmd_new     "$@" ;;
   use)           cmd_use     "$@" ;;
   clear)         cmd_clear   "$@" ;;
+  login-cmd)     cmd_login_cmd "$@" ;;
+  logout)        cmd_logout  "$@" ;;
+  rename)        cmd_rename  "$@" ;;
+  rm|delete)     cmd_rm      "$@" ;;
   help|-h|--help) cmd_help ;;
   *)             die "comando sconosciuto: $cmd (prova: claude-account help)" ;;
 esac

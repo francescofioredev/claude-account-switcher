@@ -2,15 +2,19 @@
   "name": "claude-account-switcher",
   "displayName": "Claude Account Switcher",
   "description": "Mostra e cambia l'account Claude Code usato in questa finestra, come il branch git.",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "publisher": "francescofioredev",
   "license": "MIT",
   "engines": {
     "vscode": "^1.85.0"
   },
-  "categories": ["Other"],
+  "categories": [
+    "Other"
+  ],
   "main": "./extension.js",
-  "activationEvents": ["onStartupFinished"],
+  "activationEvents": [
+    "onStartupFinished"
+  ],
   "contributes": {
     "commands": [
       {
@@ -19,9 +23,41 @@
       },
       {
         "command": "claudeAccount.refresh",
-        "title": "Claude Account: Aggiorna"
+        "title": "Claude Account: Aggiorna",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "claudeAccount.showPanel",
+        "title": "Claude Account: Mostra il pannello account"
       }
     ],
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "claudeAccounts",
+          "title": "Claude Accounts",
+          "icon": "resources/account.svg"
+        }
+      ]
+    },
+    "views": {
+      "claudeAccounts": [
+        {
+          "id": "claudeAccounts.panel",
+          "type": "webview",
+          "name": "Account"
+        }
+      ]
+    },
+    "menus": {
+      "view/title": [
+        {
+          "command": "claudeAccount.refresh",
+          "when": "view == claudeAccounts.panel",
+          "group": "navigation"
+        }
+      ]
+    },
     "configuration": {
       "title": "Claude Account Switcher",
       "properties": {
@@ -36,6 +72,24 @@
           "default": 99,
           "scope": "machine",
           "description": "Priorità dell'elemento nella status bar. Più alto = più a sinistra."
+        },
+        "claudeAccount.usageStaleAfterMinutes": {
+          "type": "number",
+          "default": 30,
+          "scope": "machine",
+          "description": "Dopo quanti minuti i consumi vengono segnalati come non aggiornati."
+        },
+        "claudeAccount.usageInTooltip": {
+          "type": "boolean",
+          "default": true,
+          "scope": "machine",
+          "description": "Mostra una riga di consumi nel tooltip della status bar."
+        },
+        "claudeAccount.usageRefreshMinutes": {
+          "type": "number",
+          "default": 10,
+          "scope": "machine",
+          "description": "Ogni quanti minuti il pannello, se aperto, richiede i consumi all'API. 0 disattiva l'aggiornamento automatico."
         }
       }
     }

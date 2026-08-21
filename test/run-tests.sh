@@ -113,6 +113,154 @@ chk "wrapper degrada se la CLI manca" "avviato" \
 echo "--- 11. list"
 chk "list mostra i due slot" "2" "$($CLI list | wc -l | tr -d ' ')"
 
+echo "--- 12. usage --porcelain"
+# fixture pretty-printed: flat vs pretty cambia il comportamento del parser, e il
+# .claude.json reale è pretty (3582 righe). Testare su una riga sola non proverebbe nulla.
+cat > "$HOME/.claude.json" <<'JSON'
+{
+  "oauthAccount": {
+    "emailAddress": "default@example.com",
+    "displayName": "Tizio",
+    "organizationType": "claude_max",
+    "organizationRateLimitTier": "default_claude_max_20x"
+  },
+  "cachedUsageUtilization": {
+    "fetchedAtMs": 1787157358038,
+    "utilization": {
+      "five_hour": {
+        "utilization": 3,
+        "resets_at": "2026-08-19T21:09:59.700950+00:00"
+      },
+      "seven_day": {
+        "utilization": 14,
+        "resets_at": "2026-08-20T16:59:59.700971+00:00"
+      },
+      "seven_day_opus": null,
+      "extra_usage": {
+        "is_enabled": true,
+        "monthly_limit": 2000
+      },
+      "limits": [
+        { "kind": "session",     "percent": 3,  "is_active": false },
+        { "kind": "weekly_all",  "percent": 14, "is_active": true }
+      ],
+      "spend": {
+        "used":  { "amount_minor": 250, "currency": "EUR", "exponent": 2 },
+        "limit": { "amount_minor": 2000, "currency": "EUR", "exponent": 2 },
+        "percent": 12
+      }
+    }
+  }
+}
+JSON
+# slot con extra_usage spento ma spend.used.currency valorizzata: caso reale, la UI
+# non deve mostrare una riga credito vuota deducendo la presenza dalla valuta.
+$CLI new noextra >/dev/null 2>&1
+cat > "$HOME/.claude-accounts/noextra/.claude.json" <<'JSON'
+{
+  "oauthAccount": { "emailAddress": "noextra@example.com" },
+  "cachedUsageUtilization": {
+    "fetchedAtMs": 1787157351935,
+    "utilization": {
+      "five_hour": { "utilization": 1, "resets_at": "2026-08-19T21:19:59.861023+00:00" },
+      "seven_day": { "utilization": 12, "resets_at": "2026-08-20T07:59:59.861045+00:00" },
+      "extra_usage": { "is_enabled": false },
+      "limits": [ { "kind": "weekly_all", "percent": 12, "is_active": true } ],
+      "spend": { "used": { "amount_minor": null, "currency": "USD", "exponent": 2 } }
+    }
+  }
+}
+JSON
+$CLI new rotto >/dev/null 2>&1
+printf '{"oauthAccount":{"emailAddress":"rotto@example.com"},"cachedUsa' > "$HOME/.claude-accounts/rotto/.claude.json"
+$CLI new mailoggato >/dev/null 2>&1
+
+u=$($CLI usage --porcelain default)
+chk "5h"                   "3"  "$(field "$u" five_hour_pct)"
+chk "7d"                   "14" "$(field "$u" seven_day_pct)"
+chk "resets_at integro (non troncato al +00:00)" \
+    "2026-08-19T21:09:59.700950+00:00" "$(field "$u" five_hour_resets_at)"
+chk "seven_day non matcha seven_day_opus" "1" "$(printf '%s\n' "$u" | grep -c '^seven_day_pct=')"
+chk "active_limit"         "weekly_all" "$(field "$u" active_limit)"
+chk "tier"                 "default_claude_max_20x" "$(field "$u" tier)"
+chk "extra attivo"         "1"   "$(field "$u" extra_enabled)"
+chk "spend usato"          "250" "$(field "$u" spend_used_minor)"
+chk "spend valuta"         "EUR" "$(field "$u" spend_currency)"
+
+u=$($CLI usage --porcelain noextra)
+chk "spend azzerato se extra spento" "" "$(field "$u" spend_currency)"
+chk "extra spento"         "0"   "$(field "$u" extra_enabled)"
+chk "percentuali comunque presenti" "12" "$(field "$u" seven_day_pct)"
+
+u=$($CLI usage --porcelain mailoggato)
+chk "mai loggato: logged_in=0"        "0" "$(field "$u" logged_in)"
+chk "mai loggato: nessuna percentuale" ""  "$(field "$u" five_hour_pct)"
+
+chk "json corrotto non rompe"  "0" "$($CLI usage --porcelain rotto >/dev/null 2>&1; echo $?)"
+chk "json corrotto: nessun dato" ""  "$(field "$($CLI usage --porcelain rotto)" five_hour_pct)"
+chk "usage senza nome elenca tutti" "5" "$($CLI usage --porcelain | grep -c '^name=')"
+chk "usage slot inesistente"   "1" "$($CLI usage --porcelain fantasma >/dev/null 2>&1; echo $?)"
+
+echo "--- 13. list --porcelain: colonne appese in coda"
+l=$($CLI list --porcelain | head -1)
+chk "6 colonne"        "6" "$(printf '%s' "$l" | awk -F'\t' '{print NF}')"
+chk "colonna 1 invariata" "default" "$(printf '%s' "$l" | cut -f1)"
+chk "colonna 3 invariata" "$HOME/.claude" "$(printf '%s' "$l" | cut -f3)"
+chk "logged_in"        "1" "$(printf '%s' "$l" | cut -f5)"
+chk "keychain default senza suffisso" "Claude Code-credentials" "$(printf '%s' "$l" | cut -f6)"
+chk "keychain slot con hash" "Claude Code-credentials-$(printf '%s' "$HOME/.claude-accounts/lavoro" | shasum -a 256 | cut -c1-8)" \
+    "$($CLI list --porcelain | grep '^lavoro	' | cut -f6)"
+
+echo "--- 14. login-cmd"
+chk "default: nessuna CLAUDE_CONFIG_DIR" "claude auth login" "$($CLI login-cmd default)"
+chk "slot: con CLAUDE_CONFIG_DIR" "CLAUDE_CONFIG_DIR=$HOME/.claude-accounts/lavoro claude auth login" \
+    "$($CLI login-cmd lavoro)"
+chk "slot inesistente" "1" "$($CLI login-cmd fantasma >/dev/null 2>&1; echo $?)"
+
+echo "--- 15. rename"
+chk "rename default rifiutato"    "1" "$($CLI rename default x >/dev/null 2>&1; echo $?)"
+chk "rename verso default rifiutato" "1" "$($CLI rename lavoro default >/dev/null 2>&1; echo $?)"
+chk "rename su nome esistente"    "1" "$($CLI rename lavoro noextra >/dev/null 2>&1; echo $?)"
+chk "rename inesistente"          "1" "$($CLI rename fantasma x >/dev/null 2>&1; echo $?)"
+$CLI use lavoro "$HOME/proj/beta" >/dev/null
+out=$($CLI rename lavoro ufficio 2>&1)
+chk "dir spostata"      "yes" "$([ -d "$HOME/.claude-accounts/ufficio" ] && echo yes)"
+chk "vecchia dir sparita" ""  "$([ -d "$HOME/.claude-accounts/lavoro" ] && echo yes)"
+ovbeta="$HOME/.config/claude-account/overrides/$(cd "$HOME/proj/beta" && pwd -P | tr '/' '-')"
+chk "override riscritto" "ufficio" "$(cat "$ovbeta")"
+chk "avvisa del nuovo login" "1" "$(printf '%s\n' "$out" | grep -c 'Rifai il login')"
+chk "tabella non modificata dal rename" "2" "$(grep -c '^lavoro	' "$HOME/.config/claude-account/accounts")"
+chk "rename avvisa sulla tabella" "1" "$(printf '%s\n' "$out" | grep -c 'puntano ancora')"
+$CLI rename ufficio lavoro >/dev/null 2>&1
+
+echo "--- 16. rm"
+chk "rm default rifiutato" "1" "$($CLI rm default >/dev/null 2>&1; echo $?)"
+chk "rm inesistente"       "1" "$($CLI rm fantasma >/dev/null 2>&1; echo $?)"
+# una copia reale al posto del symlink va protetta: quei file sono unici
+cp -R "$HOME/.claude/skills" "$HOME/.claude-accounts/noextra/skills-tmp"
+rm "$HOME/.claude-accounts/noextra/skills" && mv "$HOME/.claude-accounts/noextra/skills-tmp" "$HOME/.claude-accounts/noextra/skills"
+chk "rifiuta se c'è config copiata, non symlinkata" "1" "$($CLI rm noextra >/dev/null 2>&1; echo $?)"
+chk "--force passa"        "0" "$($CLI rm noextra --force >/dev/null 2>&1; echo $?)"
+
+$CLI use lavoro "$HOME/proj/beta" >/dev/null
+$CLI rm lavoro >/dev/null 2>&1
+chk "slot rimosso"      ""  "$([ -d "$HOME/.claude-accounts/lavoro" ] && echo yes)"
+chk "override ripulito" ""  "$([ -f "$ovbeta" ] && echo yes)"
+# le due asserzioni portanti: rm -rf non deve seguire i symlink verso ~/.claude
+chk "target del symlink intatto" "istruzioni" "$(cat "$HOME/.claude/CLAUDE.md")"
+chk "~/.claude sopravvive"       "yes" "$([ -d "$HOME/.claude" ] && echo yes)"
+chk "skills del default intatte" "yes" "$([ -d "$HOME/.claude/skills" ] && echo yes)"
+
+echo "--- 17. --live degrada alla cache"
+# nella HOME finta non c'è nessuna voce Keychain: --live deve ricadere sulla cache
+# senza errori e senza spacciare il dato per fresco
+u=$($CLI usage --live --porcelain default)
+chk "--live senza credenziali: exit 0" "0" "$($CLI usage --live --porcelain default >/dev/null 2>&1; echo $?)"
+chk "--live marcato come cache"  "0"  "$(field "$u" live)"
+chk "--live conserva i dati in cache" "3" "$(field "$u" five_hour_pct)"
+chk "cache: live=0"              "0"  "$(field "$($CLI usage --porcelain default)" live)"
+chk "--live su mai loggato"      "0"  "$($CLI usage --live --porcelain mailoggato >/dev/null 2>&1; echo $?)"
+
 printf '\n%s passati, %s falliti\n' "$pass" "$fail"
 rm -rf "$T"
 [ "$fail" -eq 0 ]

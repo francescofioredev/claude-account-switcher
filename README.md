@@ -62,7 +62,23 @@ quello di default. Per controllare:
 ```sh
 claude-account list                      # chi è loggato in quale slot
 claude-account status ~/Coding/acme/api  # account, config dir, e perché
+claude-account usage                     # consumi dalla cache locale
+claude-account usage --live              # consumi veri, chiesti all'API
 ```
+
+### Gestire gli account
+
+```sh
+claude-account login-cmd lavoro      # stampa la riga di login di quello slot
+claude-account logout lavoro         # disconnette e rimuove le credenziali
+claude-account rename lavoro ufficio # sposta lo slot (richiede un nuovo login)
+claude-account rm lavoro             # elimina slot, credenziali e override
+```
+
+`rm` rimuove anche la voce del Keychain e gli override che puntavano a quell'account; se la
+tabella `accounts` lo cita ancora te lo dice, senza toccarla (è scritta a mano). Se dentro lo
+slot trova config **copiata** invece che symlinkata si ferma: quei file sono unici, e li
+cancella solo con `--force`.
 
 ### I tre livelli di precedenza
 
@@ -93,6 +109,10 @@ transcript smettono di essere condivisi, al prezzo di perdere memory e `--contin
 In `extension/`. Mostra l'account attivo nella status bar e permette di cambiarlo con un click; il tooltip
 dice anche **perché** quell'account è attivo (override, marker file, tabella o default).
 
+Nella Activity Bar c'è un pannello con una card per account: consumi delle ultime 5 ore e dei 7
+giorni, quando si azzerano, credito extra se attivo, e i pulsanti per rifare il login,
+disconnettere, rinominare ed eliminare. I consumi si aggiornano all'apertura e con ⟳.
+
 ```sh
 cd extension
 npx @vscode/vsce package --allow-missing-repository --skip-license
@@ -106,13 +126,37 @@ wrapper. Se non la trova, lo dice nel tooltip e Claude Code continua a funzionar
 |---|---|---|
 | `claudeAccount.cliPath` | vuoto | Percorso di `claude-account`. Vuoto = prova `~/.local/bin/claude-account`, poi il PATH. Serve perché VS Code lanciato dal Dock ha un PATH ridotto. |
 | `claudeAccount.statusBarPriority` | `99` | Posizione nella status bar: più alto, più a sinistra. |
+| `claudeAccount.usageStaleAfterMinutes` | `360` | Dopo quanti minuti i consumi vengono segnalati come vecchi. |
+| `claudeAccount.usageInTooltip` | `true` | Riga di consumi nel tooltip della status bar. |
+
+### Da dove vengono i consumi
+
+Da `GET /api/oauth/usage`, lo stesso endpoint che chiama Claude Code, autenticato con il token
+OAuth di quell'account letto dal Keychain. È l'unico modo per avere numeri veri: in
+`.claude.json` c'è un `cachedUsageUtilization`, ma Claude Code lo rinfresca di rado — misurato
+su questa macchina, il file veniva riscritto ogni 3 minuti con il campo fermo da 15 ore, e i
+valori in cache (14%) erano il quadruplo di quelli reali (3%).
+
+La chiamata parte **solo su richiesta**: all'apertura del pannello e quando premi ⟳. I refresh
+automatici dai watcher usano la cache, così non c'è traffico di rete né rischio di prompt del
+Keychain a ogni scrittura di `.claude.json`. Ogni card dice se il dato è live o in cache.
+
+Se la chiamata fallisce — token illeggibile, rete giù, endpoint cambiato — si ricade sulla
+cache, etichettata come tale. Nessun errore bloccante.
+
+⚠️ `/api/oauth/usage` **non è documentato**: un aggiornamento di Claude Code può cambiarlo o
+rimuoverlo, e in quel caso restano i valori in cache finché non si aggiorna questo repo.
+
+Serve `curl` (di sistema) più `jq` (di sistema su macOS 15+) oppure `node` come ripiego. Se
+mancano i parser il pannello resta senza barre e tutto il resto continua a funzionare.
 
 ## Da sapere
 
 - **Il cambio account vale dalla conversazione successiva.** Il wrapper viene eseguito allo spawn del processo
   Claude: una conversazione già aperta continua sull'account con cui è partita.
-- **Non rinominare né spostare una config dir dopo il login.** La chiave del Keychain è l'hash del path:
-  cambiandolo l'account risulta sloggato e le vecchie credenziali restano orfane.
+- **Non spostare a mano una config dir dopo il login.** La chiave del Keychain è l'hash del path:
+  cambiandolo l'account risulta sloggato e le vecchie credenziali restano orfane. Per rinominare usa
+  `claude-account rename`, che pulisce le credenziali vecchie e ti dice di rifare il login.
 - **`CLAUDE_CONFIG_DIR` impostata al valore di default non equivale a non impostarla**, sempre per lo stesso
   motivo. Per questo il wrapper fa `unset` invece di impostarla.
 - **MCP e connettori sono per account.** Gli MCP user-scoped e i connettori claude.ai vanno riautorizzati sul
