@@ -27,6 +27,7 @@
     "Other"
   ],
   "main": "./extension.js",
+  "icon": "resources/icon.png",
   "activationEvents": [
     "onStartupFinished"
   ],
