@@ -61,18 +61,24 @@ function parseKeyValue(out) {
 
 // ---------------------------------------------------------------- finestra
 
+// The CLI canonicalizes paths the same way (abspath), and both sides derive the
+// same slug from the result: diverge here and an override written by the extension
+// is not the one the wrapper looks up.
+function canonical(p) {
+  try {
+    return fs.realpathSync(p).normalize('NFC');
+  } catch {
+    return p.normalize('NFC');
+  }
+}
+
 // Must match the cwd the Claude Code extension uses to launch the process:
 // realpathSync(workspaceFolders[0] ?? homedir()).normalize('NFC').
 // In a multi-root workspace that is the FIRST folder of the .code-workspace; if we
 // computed anything else here, the status bar would show an account other than the
 // one actually in use.
 function windowPath() {
-  const first = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
-  try {
-    return fs.realpathSync(first ?? os.homedir()).normalize('NFC');
-  } catch {
-    return (first ?? os.homedir()).normalize('NFC');
-  }
+  return canonical(vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? os.homedir());
 }
 
 // ---------------------------------------------------------------- account
@@ -193,7 +199,10 @@ async function refresh() {
   state = parseKeyValue(out);
 
   const label = state.email || (state.account === 'default' ? 'default' : state.account);
-  item.text = `${pendingSwitch ? '$(warning)' : '$(account)'} ${label}`;
+  // The start folder is an invisible change of behaviour — every new session runs
+  // somewhere else — so when it is set it is named right there in the bar.
+  const folder = state.cwd ? ` $(folder) ${path.basename(state.cwd)}` : '';
+  item.text = `${pendingSwitch ? '$(warning)' : '$(account)'} ${label}${folder}`;
 
   const md = new vscode.MarkdownString();
   md.appendMarkdown(`**Claude Code account for this window**\n\n`);
@@ -201,7 +210,12 @@ async function refresh() {
   md.appendMarkdown(`- Login: ${state.email || '_never — Claude will ask_'}\n`);
   md.appendMarkdown(`- Why: ${SOURCE_LABEL[state.source] || state.source}\n`);
   md.appendMarkdown(`- Config dir: \`${state.config_dir}\`\n`);
-  md.appendMarkdown(`- Project: \`${state.path}\`\n`);
+  if (state.cwd) {
+    md.appendMarkdown(`- Starts in: \`${state.cwd}\`\n`);
+    md.appendMarkdown(`- Workspace root: \`${state.path}\`\n`);
+  } else {
+    md.appendMarkdown(`- Project: \`${state.path}\`\n`);
+  }
 
   if (vscode.workspace.getConfiguration('claudeAccount').get('usageInTooltip', true)) {
     const u = usageCache.find((r) => r.name === state.account);
@@ -223,7 +237,8 @@ async function refresh() {
     );
   }
   md.appendMarkdown(
-    `\n_Click to switch account._ · [Panel](command:claudeAccount.showPanel)`
+    `\n_Click to switch account._ · [Folder](command:claudeAccount.setFolder)` +
+      ` · [Panel](command:claudeAccount.showPanel)`
   );
   md.isTrusted = true;
   md.supportThemeIcons = true;
@@ -252,6 +267,8 @@ const ICON = {
     '<svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"><path d="M13.5 8a5.5 5.5 0 1 1-1.6-3.9"/><path d="M13.7 2.4v2.9h-2.9"/></svg>',
   more:
     '<svg viewBox="0 0 16 16" width="13" height="13" fill="currentColor"><circle cx="3.5" cy="8" r="1.2"/><circle cx="8" cy="8" r="1.2"/><circle cx="12.5" cy="8" r="1.2"/></svg>',
+  folder:
+    '<svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"><path d="M1.9 12.6V3.4h4.2l1.5 1.8h6.5v7.4z"/></svg>',
 };
 
 // Quota percentages are not a linear "how much is left": below 50% the difference
@@ -320,7 +337,7 @@ function card(u, current) {
   </div>`;
 }
 
-function panelHtml(webview, records, current, projectPath) {
+function panelHtml(webview, records, current, projectPath, sessionCwd) {
   const nonce = Math.random().toString(36).slice(2) + Date.now().toString(36);
   const cards = records.length
     ? records.map((u) => card(u, current)).join('')
@@ -464,6 +481,21 @@ function panelHtml(webview, records, current, projectPath) {
     display: flex; align-items: center; justify-content: space-between; gap: 8px;
     padding: 4px 1px 8px; color: var(--vscode-descriptionForeground); font-size: 11px;
   }
+  /* Where the session runs is context for every card below it, not a per-account
+     property: one row at the top, above them all. */
+  .dir {
+    display: flex; align-items: baseline; gap: 6px;
+    margin: 0 1px 9px; padding-bottom: 8px;
+    border-bottom: 1px solid var(--vscode-panel-border);
+    color: var(--vscode-descriptionForeground);
+  }
+  .dk { flex: none; }
+  .dv {
+    flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    color: var(--vscode-foreground);
+  }
+  .dir button.ico { margin: -4px 0; }
+
   .add { width: 100%; margin: 2px 0 6px; padding: 6px; border: 1px dashed var(--vscode-panel-border); }
   .add:hover { border-color: var(--vscode-focusBorder); border-style: solid; }
   .empty { color: var(--vscode-descriptionForeground); line-height: 1.6; }
@@ -478,6 +510,12 @@ function panelHtml(webview, records, current, projectPath) {
     * { transition: none !important; }
   }
 </style></head><body>
+<div class="dir">
+  <span class="dk">Starts in</span>
+  <span class="dv" title="${esc(sessionCwd || projectPath)}">${esc(path.basename(sessionCwd || projectPath))}</span>
+  <button class="ico" data-a="folder" title="Change the folder the session starts in"
+    aria-label="Change the folder the session starts in">${ICON.folder}</button>
+</div>
 ${cards}
 <button class="add" data-a="new">+ Nuovo account</button>
 ${foot ? `<div class="foot"><span>${esc(foot)}</span>
@@ -520,7 +558,8 @@ class AccountsViewProvider {
       this.view.webview,
       usageCache,
       state?.account,
-      state?.path || windowPath()
+      state?.path || windowPath(),
+      state?.cwd
     );
   }
 }
@@ -542,6 +581,8 @@ async function handleAction(m) {
       return openLogin(m.name);
     case 'logout':
       return doLogout(m.name);
+    case 'folder':
+      return chooseFolder();
     case 'more':
       return moreActions(m.name);
   }
@@ -768,6 +809,70 @@ async function switchAccount() {
   await offerNewConversation();
 }
 
+// Which folder Claude runs in decides whose CLAUDE.md, hooks, skills and commands
+// apply. Only the workspace roots are offered: the session has to stay somewhere the
+// window already has open.
+async function chooseFolder() {
+  const p = windowPath();
+
+  if (!state) {
+    vscode.window.showErrorMessage(
+      `claude-account not reachable (tried: ${cliPath()}). Run ./install.sh or set claudeAccount.cliPath.`
+    );
+    return;
+  }
+
+  const folders = (vscode.workspace.workspaceFolders ?? []).map((f) => ({
+    name: f.name,
+    path: canonical(f.uri.fsPath),
+  }));
+  const pinned = state.cwd;
+
+  // With a single root there is nothing to choose: saying so beats a quick pick
+  // whose only entry is where the session already runs.
+  if (folders.length < 2 && !pinned) {
+    vscode.window.showInformationMessage(
+      'The session already starts in the only folder of this window. ' +
+        'Add a second folder to the workspace to choose between them.'
+    );
+    return;
+  }
+
+  const current = pinned || p;
+  const items = folders.map((f) => ({
+    label: `${f.path === current ? '$(check) ' : '      '}${f.name}`,
+    description: f.path === p ? 'workspace root' : '',
+    detail: f.path,
+    folder: f.path,
+  }));
+
+  if (pinned) {
+    items.push({ label: '', kind: vscode.QuickPickItemKind.Separator });
+    items.push({
+      label: '$(discard) Back to the workspace root',
+      detail: p,
+      folder: p,
+    });
+  }
+
+  const picked = await vscode.window.showQuickPick(items, {
+    title: 'Folder the Claude session starts in',
+    placeHolder: 'Its CLAUDE.md, hooks, skills and commands are the ones that apply',
+  });
+  if (!picked) return;
+
+  // The root is the absence of a choice, not a choice pointing at itself: no file
+  // left behind for the wrapper to read on every launch.
+  if (picked.folder === p) await runCli(['clear-cwd', p]);
+  else await runCli(['set-cwd', picked.folder, p]);
+
+  pendingSwitch = true;
+  await refresh();
+  await offerNewConversation(
+    `Sessions start in "${path.basename(state?.cwd || p)}". It applies from the next conversation.`
+  );
+}
+
 async function createAccount() {
   const name = await vscode.window.showInputBox({
     title: 'New Claude Code account',
@@ -792,9 +897,9 @@ async function createAccount() {
   );
 }
 
-async function offerNewConversation() {
+async function offerNewConversation(message) {
   const choice = await vscode.window.showInformationMessage(
-    `Account set to "${state?.account ?? '?'}". It applies from the next conversation.`,
+    message ?? `Account set to "${state?.account ?? '?'}". It applies from the next conversation.`,
     'Open a new conversation'
   );
   if (choice) {
@@ -824,7 +929,7 @@ async function setupWatchers(context) {
   // The choice can change from another window or from a terminal: the label has to
   // stay true regardless, not only when this window is the one changing it.
   const targets = [
-    new vscode.RelativePattern(vscode.Uri.file(conf), '{accounts,overrides/**}'),
+    new vscode.RelativePattern(vscode.Uri.file(conf), '{accounts,overrides/**,cwd/**}'),
     new vscode.RelativePattern(vscode.Uri.file(os.homedir()), '.claude.json'),
     new vscode.RelativePattern(vscode.Uri.file(path.join(os.homedir(), '.claude-accounts')), '*/.claude.json'),
     new vscode.RelativePattern(vscode.Uri.file(path.join(os.homedir(), '.claude-accounts')), '*'),
@@ -853,6 +958,7 @@ function activate(context) {
 
   context.subscriptions.push(
     vscode.commands.registerCommand('claudeAccount.switch', switchAccount),
+    vscode.commands.registerCommand('claudeAccount.setFolder', chooseFolder),
     vscode.commands.registerCommand('claudeAccount.refresh', () => refreshAll(true)),
     vscode.commands.registerCommand('claudeAccount.showPanel', () =>
       vscode.commands.executeCommand('claudeAccounts.panel.focus')

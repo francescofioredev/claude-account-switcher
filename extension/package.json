@@ -2,7 +2,7 @@
   "name": "claude-account-switcher",
   "displayName": "Claude Account Switcher",
   "description": "Show and switch the Claude Code account used in this window, like the git branch.",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "publisher": "francescofioredev",
   "license": "MIT",
   "repository": {
@@ -36,6 +36,10 @@
       {
         "command": "claudeAccount.switch",
         "title": "Claude Account: Switch account for this project"
+      },
+      {
+        "command": "claudeAccount.setFolder",
+        "title": "Claude Account: Choose the folder the session starts in"
       },
       {
         "command": "claudeAccount.refresh",

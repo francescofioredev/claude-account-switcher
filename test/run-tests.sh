@@ -261,6 +261,45 @@ chk "--live keeps the cached data" "3" "$(field "$u" five_hour_pct)"
 chk "cache: live=0"              "0"  "$(field "$($CLI usage --porcelain default)" live)"
 chk "--live on never-logged-in"      "0"  "$($CLI usage --live --porcelain mailoggato >/dev/null 2>&1; echo $?)"
 
+echo "--- 18. start folder: pin, read back, clear"
+mkdir -p "$HOME/root A" "$HOME/rootB"
+chk "no pin: cwd empty"      ""  "$($CLI cwd "$HOME/rootB")"
+chk "no pin: status cwd empty" "" "$(field "$($CLI status "$HOME/rootB")" cwd)"
+# a space in the folder name is why the pin is not read with read1()
+# the pin is canonicalized on the way in, like the account overrides
+rootA=$(cd "$HOME/root A" && pwd -P)
+$CLI set-cwd "$HOME/root A" "$HOME/rootB" >/dev/null
+chk "cwd reads the pin back" "$rootA" "$($CLI cwd "$HOME/rootB")"
+chk "status reports the pin" "$rootA" "$(field "$($CLI status "$HOME/rootB")" cwd)"
+chk "path with /./ same slug" "$rootA" "$($CLI cwd "$HOME/./rootB")"
+chk "path with .. same slug"  "$rootA" "$($CLI cwd "$HOME/proj/../rootB")"
+chk "set-cwd on a missing folder fails" "1" "$($CLI set-cwd "$HOME/nope" "$HOME/rootB" >/dev/null 2>&1; echo $?)"
+chk "pin survives a failed set-cwd" "$rootA" "$($CLI cwd "$HOME/rootB")"
+# pinning a folder to itself is the absence of a pin, not a pin that loops
+$CLI set-cwd "$HOME/rootB" "$HOME/rootB" >/dev/null
+chk "pin at itself is ignored" "" "$($CLI cwd "$HOME/rootB")"
+$CLI set-cwd "$HOME/root A" "$HOME/rootB" >/dev/null
+$CLI clear-cwd "$HOME/rootB" >/dev/null
+chk "clear-cwd removes the pin" "" "$($CLI cwd "$HOME/rootB")"
+
+echo "--- 19. the wrapper moves, and the account does not follow"
+# ~/proj/alpha resolves to a slot via the table, ~/root A to nothing: after the cd the
+# session is in ~/root A but the account must still be the one for ~/proj/alpha
+$CLI new work >/dev/null 2>&1
+$CLI set-cwd "$HOME/root A" "$HOME/proj/alpha" >/dev/null
+chk "wrapper starts in the pinned folder" "$(cd "$HOME/root A" && pwd -P)" \
+  "$(cd "$HOME/proj/alpha" && $WRAP /bin/sh -c 'pwd -P')"
+chk "account stays the window's" "$HOME/.claude-accounts/work" \
+  "$(cd "$HOME/proj/alpha" && $WRAP /bin/sh -c 'echo $CLAUDE_CONFIG_DIR')"
+# the pinned folder disappears (deleted, or dropped from the workspace)
+rm -rf "$HOME/root A"
+chk "pin at a missing folder: stays put" "$(cd "$HOME/proj/alpha" && pwd -P)" \
+  "$(cd "$HOME/proj/alpha" && $WRAP /bin/sh -c 'pwd -P')"
+chk "pin at a missing folder: still starts" "avviato" \
+  "$(cd "$HOME/proj/alpha" && $WRAP /bin/echo avviato 2>/dev/null)"
+$CLI clear-cwd "$HOME/proj/alpha" >/dev/null
+$CLI rm work --force >/dev/null 2>&1
+
 printf '\n%s passed, %s failed\n' "$pass" "$fail"
 rm -rf "$T"
 [ "$fail" -eq 0 ]

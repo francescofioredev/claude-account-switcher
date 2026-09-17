@@ -14,7 +14,7 @@
 
 set -u
 
-VERSION=0.2.0
+VERSION=0.3.0
 REPO_URL="https://github.com/francescofioredev/claude-account-switcher"
 
 ACCOUNTS="$HOME/.claude-accounts"
@@ -22,6 +22,7 @@ DEFAULT_DIR="$HOME/.claude"
 CONF="${XDG_CONFIG_HOME:-$HOME/.config}/claude-account"
 ACCOUNTS_FILE="$CONF/accounts"
 OVERRIDES="$CONF/overrides"
+CWDS="$CONF/cwd"
 
 # Files and directories of ~/.claude shared with every new slot via symlink.
 # Everything account-specific or volatile stays out: .claude.json, ide/,
@@ -37,6 +38,9 @@ die() { printf '%s\n' "$*" >&2; exit 1; }
 
 # Read a one-line file, stripping spaces and newlines.
 read1() { tr -d ' \t\n\r' < "$1"; }
+
+# Same, but for files holding a path: spaces are part of the value there.
+readpath1() { sed -n '1p' "$1" | tr -d '\n\r'; }
 
 # The same canonicalization the VS Code extension gets from realpathSync():
 # without it, the slug written here would not match the one it looks up.
@@ -94,6 +98,22 @@ resolve() {
 
   ACCOUNT=default; RESOLVED=; SOURCE=default
   return 0
+}
+
+# The folder the session starts in, pinned per window by the extension. Prints
+# nothing when there is nothing usable to say: a pin left behind by a folder that
+# was deleted or dropped from the workspace has to degrade to the window, not stop
+# Claude from starting.
+session_cwd() {
+  d=$(abspath "${1:-$PWD}")
+  f="$CWDS/$(slug_of "$d")"
+  [ -f "$f" ] || return 0
+  c=$(readpath1 "$f")
+  case "$c" in /*) ;; *) return 0 ;; esac
+  [ -d "$c" ] || return 0
+  c=$(abspath "$c")
+  [ "$c" = "$d" ] && return 0
+  printf '%s\n' "$c"
 }
 
 # The config dir of an account, including the default.
@@ -309,6 +329,7 @@ cmd_status() {
   printf 'source=%s\n' "$SOURCE"
   printf 'path=%s\n' "$(abspath "${1:-$PWD}")"
   printf 'email=%s\n' "$(email_of "$ACCOUNT")"
+  printf 'cwd=%s\n' "$(session_cwd "${1:-}")"
 }
 
 # list           human-readable table
@@ -571,6 +592,30 @@ cmd_clear() {
   printf '%s → project default\n' "$d"
 }
 
+cmd_cwd() {
+  session_cwd "${1:-}"
+  return 0
+}
+
+# Pinning a start folder does not touch the account: the wrapper resolves the
+# account from the window and only then moves.
+cmd_set_cwd() {
+  t=${1:-}
+  [ -n "$t" ] || die "usage: claude-account set-cwd <folder> [path]"
+  [ -d "$t" ] || die "no such folder: $t"
+  t=$(abspath "$t")
+  d=$(abspath "${2:-$PWD}")
+  mkdir -p "$CWDS" || die "cannot create $CWDS"
+  printf '%s\n' "$t" > "$CWDS/$(slug_of "$d")"
+  printf '%s → starts in %s\n' "$d" "$t"
+}
+
+cmd_clear_cwd() {
+  d=$(abspath "${1:-$PWD}")
+  rm -f "$CWDS/$(slug_of "$d")"
+  printf '%s → starts in itself\n' "$d"
+}
+
 cmd_help() {
   cat <<EOF
 claude-account — one Claude Code account per project
@@ -582,12 +627,19 @@ claude-account — one Claude Code account per project
   new <name>            create the slot ~/.claude-accounts/<name>
   use <name|default> [path]   pin an account to that project
   clear [path]          remove the pin, back to the project default
+  cwd [path]            print the folder the session starts in (empty = the path itself)
+  set-cwd <folder> [path]     start the session in <folder> instead of the path
+  clear-cwd [path]      remove the start folder, back to the path itself
   login-cmd <name>      print the login line for that account
   logout <name>         log the account out and remove its credentials
   rename <old> <new>    rename a slot (requires logging in again)
   rm <name> [--force]   delete the slot, its credentials and its overrides
 
 Precedence: override (use) > .claude-account file in the repo > $ACCOUNTS_FILE > default.
+
+set-cwd is independent of all of that: it moves the session's working directory, so
+it picks up that folder's CLAUDE.md, hooks, skills and commands, while the account
+keeps being resolved from the path the editor launched Claude in.
 
 Without --live, usage comes from the cache in .claude.json, which Claude Code refreshes
 rarely: it can be days old. With --live it asks the API, reading the token from the
@@ -610,6 +662,9 @@ case "$cmd" in
   new)           cmd_new     "$@" ;;
   use)           cmd_use     "$@" ;;
   clear)         cmd_clear   "$@" ;;
+  cwd)           cmd_cwd     "$@" ;;
+  set-cwd)       cmd_set_cwd "$@" ;;
+  clear-cwd)     cmd_clear_cwd "$@" ;;
   login-cmd)     cmd_login_cmd "$@" ;;
   logout)        cmd_logout  "$@" ;;
   rename)        cmd_rename  "$@" ;;

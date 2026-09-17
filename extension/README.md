@@ -19,6 +19,9 @@ current project and lets you change it.
   and delete.
 - **Switching** — pick an account for the current project; it applies from the next
   conversation, since the account is bound when the Claude process spawns.
+- **Start folder** — pick which workspace root the session runs in, so its `CLAUDE.md`, hooks,
+  skills and commands are the ones that apply. Independent of the account, which keeps being
+  resolved from the folder the editor launched Claude in.
 
 ## Requirements
 

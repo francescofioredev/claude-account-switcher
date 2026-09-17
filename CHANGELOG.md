@@ -5,6 +5,18 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this
 project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.0]
+
+### Added
+
+- The folder a session starts in is now a choice of its own: `set-cwd`, `cwd` and `clear-cwd`
+  in the CLI, **Claude Account: Choose the folder the session starts in** in the extension,
+  which offers the workspace roots. The session picks up that folder's `CLAUDE.md`, hooks,
+  skills and commands. The account keeps being resolved from the folder the editor launched
+  Claude in, so the two choices are independent.
+- The status bar names the start folder when it is not the workspace root, and the panel shows
+  it above the account cards.
+
 ## [0.2.0]
 
 ### Added

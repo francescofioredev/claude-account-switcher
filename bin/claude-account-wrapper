@@ -23,4 +23,13 @@ else
   unset CLAUDE_CONFIG_DIR
 fi
 
+# Only now do we move, if the user picked a start folder: the account above was
+# resolved from the window, so the two choices stay independent of each other.
+# Claude takes its project root from the cwd, so this is what makes that folder's
+# CLAUDE.md, hooks, skills and commands the ones in force.
+# A cd that fails leaves the session where it was, like any other failure here.
+start=$("$(dirname "$0")/claude-account" cwd "$PWD" 2>/dev/null) || start=
+# redirected: with CDPATH set, cd prints the destination on stdout
+[ -n "$start" ] && cd "$start" >/dev/null 2>&1
+
 exec "$@"

@@ -77,6 +77,28 @@ claude-account rm work             # delete slot, credentials and overrides
 hand-written. If it finds config inside the slot that was **copied** rather than symlinked it
 stops: those files are unique, and only `--force` deletes them.
 
+### Where the session starts
+
+```sh
+claude-account set-cwd ~/work/monorepo/apps/web ~/work/monorepo  # start there instead
+claude-account cwd ~/work/monorepo                               # read it back
+claude-account clear-cwd ~/work/monorepo                         # back to the folder itself
+```
+
+Claude Code launches the CLI in the first folder of the workspace, and that folder is the one
+whose `CLAUDE.md`, hooks, skills and commands apply. In a multi-root workspace that leaves the
+other roots out of reach without reordering the `.code-workspace`. A start folder moves the
+session's working directory, so those apply instead. In the extension it is
+**Claude Account: Choose the folder the session starts in**, which offers the workspace roots.
+
+The account is *not* affected: the wrapper resolves it from the folder the editor launched
+Claude in, and only then moves. The two choices stay independent.
+
+A pinned folder that no longer exists is ignored and the session starts where it would have
+anyway. Two things to expect: Claude Code tracks trust per folder, so the first session in a
+newly pinned one may ask for it; and its session list is scoped to the workspace root, so
+sessions started elsewhere may not appear in it.
+
 ### The three levels of precedence
 
 1. **override** — `claude-account use <name> [path]`, what the status bar writes.
@@ -106,7 +128,9 @@ In `extension/`. Shows the active account in the status bar and switches it with
 tooltip also says **why** that account is active — override, marker file, table or default.
 
 The Activity Bar panel has one card per account: usage over the last 5 hours and 7 days, when
-they reset, extra credit if enabled, and buttons to log in, log out, rename and delete.
+they reset, extra credit if enabled, and buttons to log in, log out, rename and delete. Above
+them sits the folder the session starts in, with a button to change it; when it is not the
+workspace root, the status bar names it too.
 
 ```sh
 cd extension
