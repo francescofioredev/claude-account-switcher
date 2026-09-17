@@ -1,6 +1,6 @@
 #!/bin/sh
 # claude-account tests. Runs in a fake HOME and touches nothing real:
-# né ~/.claude, né ~/.claude-accounts, né ~/.config/claude-account.
+# not ~/.claude, not ~/.claude-accounts, not ~/.config/claude-account.
 #
 #   sh test/run-tests.sh
 
@@ -14,15 +14,15 @@ T=$(mktemp -d)
 export HOME="$T/home"
 unset XDG_CONFIG_HOME
 mkdir -p "$HOME/.claude/skills" "$HOME/.claude/agents" "$HOME/proj/alpha/sub" "$HOME/proj/beta" "$HOME/altro"
-printf 'istruzioni\n' > "$HOME/.claude/CLAUDE.md"
-# Asimmetria di Claude Code: il .claude.json dell'account di default sta ACCANTO
-# beside ~/.claude, while with CLAUDE_CONFIG_DIR set it sits INSIDE the config dir.
+printf 'instructions\n' > "$HOME/.claude/CLAUDE.md"
+# Claude Code's asymmetry: the default account's .claude.json sits BESIDE ~/.claude,
+# while with CLAUDE_CONFIG_DIR set it sits INSIDE the config dir.
 printf '{"oauthAccount":{"emailAddress":"default@example.com"}}' > "$HOME/.claude.json"
 
 pass=0; fail=0
-chk() { # chk <descrizione> <atteso> <ottenuto>
+chk() { # chk <description> <expected> <actual>
   if [ "$2" = "$3" ]; then pass=$((pass+1)); printf '  ok   %s\n' "$1"
-  else fail=$((fail+1)); printf '  FAIL %s\n       atteso:  [%s]\n       ottenuto:[%s]\n' "$1" "$2" "$3"; fi
+  else fail=$((fail+1)); printf '  FAIL %s\n       expected: [%s]\n       actual:   [%s]\n' "$1" "$2" "$3"; fi
 }
 field() { printf '%s\n' "$1" | sed -n "s/^$2=//p"; }
 
@@ -34,14 +34,14 @@ chk "status source"        "default" "$(field "$s" source)"
 chk "status config_dir"    "$HOME/.claude" "$(field "$s" config_dir)"
 chk "status email"         "default@example.com" "$(field "$s" email)"
 
-echo "--- 2. nonexistent path non rompe"
+echo "--- 2. nonexistent path does not break"
 chk "resolve missing"  ""        "$($CLI resolve /tmp/nope-non-esiste)"
 chk "exit code"            "0"       "$($CLI resolve /tmp/nope-non-esiste >/dev/null 2>&1; echo $?)"
 
-echo "--- 3. new creates the slot con i symlink"
+echo "--- 3. new creates the slot with symlinks"
 $CLI new work >/dev/null 2>&1
 chk "slot created"          "yes"     "$([ -d "$HOME/.claude-accounts/work" ] && echo yes)"
-chk "skills symlinkate"    "yes"     "$([ -L "$HOME/.claude-accounts/work/skills" ] && echo yes)"
+chk "skills symlinked"     "yes"     "$([ -L "$HOME/.claude-accounts/work/skills" ] && echo yes)"
 chk "CLAUDE.md symlinked" "yes"     "$([ -L "$HOME/.claude-accounts/work/CLAUDE.md" ] && echo yes)"
 chk ".claude.json NOT shared" ""  "$([ -e "$HOME/.claude-accounts/work/.claude.json" ] && echo yes)"
 chk "slot with no login" "1" "$($CLI list | grep -c 'never logged in')"
@@ -76,7 +76,7 @@ chk "resolve empty"        ""        "$($CLI resolve "$HOME/proj/alpha")"
 $CLI clear "$HOME/proj/alpha" >/dev/null
 chk "clear restores"     "table"   "$(field "$($CLI status "$HOME/proj/alpha")" source)"
 
-echo "--- 7. canonicalizzazione del path"
+echo "--- 7. path canonicalization"
 $CLI use work "$HOME/proj/beta" >/dev/null
 chk "path with /./ same slug" "override" "$(field "$($CLI status "$HOME/proj/./beta")" source)"
 chk "path with .. same slug"  "override" "$(field "$($CLI status "$HOME/proj/alpha/../beta")" source)"
@@ -84,10 +84,10 @@ $CLI clear "$HOME/proj/beta" >/dev/null
 
 echo "--- 8. marker file in the repo, and precedence"
 printf 'work\n' > "$HOME/altro/.claude-account"
-chk "marker attivo"        "$HOME/.claude-accounts/work" "$($CLI resolve "$HOME/altro")"
+chk "marker active"        "$HOME/.claude-accounts/work" "$($CLI resolve "$HOME/altro")"
 chk "source=marker"        "marker"  "$(field "$($CLI status "$HOME/altro")" source)"
 $CLI use default "$HOME/altro" >/dev/null
-chk "override batte marker" "override" "$(field "$($CLI status "$HOME/altro")" source)"
+chk "override beats marker" "override" "$(field "$($CLI status "$HOME/altro")" source)"
 $CLI clear "$HOME/altro" >/dev/null
 printf 'ghost\n' > "$HOME/altro/.claude-account"
 chk "ghost marker → default" "default" "$(field "$($CLI status "$HOME/altro")" source)"
@@ -95,23 +95,23 @@ chk "ghost marker → default" "default" "$(field "$($CLI status "$HOME/altro")"
 echo "--- 9. use on a missing slot fails"
 chk "use ghost slot"         "1"       "$($CLI use ghost "$HOME/proj/beta" >/dev/null 2>&1; echo $?)"
 
-echo "--- 10. il wrapper propaga l'env e degrada"
-mkdir -p "$HOME/nonmappato"
-chk "wrapper default→unset" "DEFAULT" "$(cd "$HOME/nonmappato" && $WRAP /bin/sh -c 'echo ${CLAUDE_CONFIG_DIR:-DEFAULT}')"
+echo "--- 10. the wrapper passes the env through and degrades"
+mkdir -p "$HOME/unmapped"
+chk "wrapper default→unset" "DEFAULT" "$(cd "$HOME/unmapped" && $WRAP /bin/sh -c 'echo ${CLAUDE_CONFIG_DIR:-DEFAULT}')"
 chk "wrapper mapped→set"   "$HOME/.claude-accounts/work" "$(cd "$HOME/proj/alpha" && $WRAP /bin/sh -c 'echo $CLAUDE_CONFIG_DIR')"
 chk "wrapper exec passes args through" "a b" "$(cd "$HOME" && $WRAP /bin/echo a b)"
 # the extension hands the wrapper the VS Code process env: if it already held a
 # CLAUDE_CONFIG_DIR, the default branch must still clear it
 chk "wrapper clears an inherited CLAUDE_CONFIG_DIR" "DEFAULT" \
-  "$(cd "$HOME/nonmappato" && CLAUDE_CONFIG_DIR=/sporco $WRAP /bin/sh -c 'echo ${CLAUDE_CONFIG_DIR:-DEFAULT}')"
+  "$(cd "$HOME/unmapped" && CLAUDE_CONFIG_DIR=/dirty $WRAP /bin/sh -c 'echo ${CLAUDE_CONFIG_DIR:-DEFAULT}')"
 # if the CLI disappears, Claude must still start
-mkdir -p "$T/orfano"
-cp "$WRAP" "$T/orfano/claude-account-wrapper"
-chk "wrapper degrades when the CLI is missing" "avviato" \
-  "$(cd "$HOME/proj/alpha" && "$T/orfano/claude-account-wrapper" /bin/echo avviato 2>/dev/null)"
+mkdir -p "$T/orphan"
+cp "$WRAP" "$T/orphan/claude-account-wrapper"
+chk "wrapper degrades when the CLI is missing" "started" \
+  "$(cd "$HOME/proj/alpha" && "$T/orphan/claude-account-wrapper" /bin/echo started 2>/dev/null)"
 
 echo "--- 11. list"
-chk "list mostra i due slot" "2" "$($CLI list | wc -l | tr -d ' ')"
+chk "list shows both slots"  "2" "$($CLI list | wc -l | tr -d ' ')"
 
 echo "--- 12. usage --porcelain"
 # pretty-printed fixture: flat vs pretty changes the parser's behaviour, and the real
@@ -173,7 +173,7 @@ cat > "$HOME/.claude-accounts/noextra/.claude.json" <<'JSON'
 JSON
 $CLI new broken >/dev/null 2>&1
 printf '{"oauthAccount":{"emailAddress":"broken@example.com"},"cachedUsa' > "$HOME/.claude-accounts/broken/.claude.json"
-$CLI new mailoggato >/dev/null 2>&1
+$CLI new nologin >/dev/null 2>&1
 
 u=$($CLI usage --porcelain default)
 chk "5h"                   "3"  "$(field "$u" five_hour_pct)"
@@ -183,18 +183,18 @@ chk "resets_at intact (not truncated at +00:00)" \
 chk "seven_day does not match seven_day_opus" "1" "$(printf '%s\n' "$u" | grep -c '^seven_day_pct=')"
 chk "active_limit"         "weekly_all" "$(field "$u" active_limit)"
 chk "tier"                 "default_claude_max_20x" "$(field "$u" tier)"
-chk "extra attivo"         "1"   "$(field "$u" extra_enabled)"
-chk "spend usato"          "250" "$(field "$u" spend_used_minor)"
-chk "spend valuta"         "EUR" "$(field "$u" spend_currency)"
+chk "extra on"             "1"   "$(field "$u" extra_enabled)"
+chk "spend used"           "250" "$(field "$u" spend_used_minor)"
+chk "spend currency"       "EUR" "$(field "$u" spend_currency)"
 
 u=$($CLI usage --porcelain noextra)
-chk "spend azzerato se extra spento" "" "$(field "$u" spend_currency)"
-chk "extra spento"         "0"   "$(field "$u" extra_enabled)"
-chk "percentuali comunque presenti" "12" "$(field "$u" seven_day_pct)"
+chk "spend zeroed when extra is off" "" "$(field "$u" spend_currency)"
+chk "extra off"            "0"   "$(field "$u" extra_enabled)"
+chk "percentages still present"     "12" "$(field "$u" seven_day_pct)"
 
-u=$($CLI usage --porcelain mailoggato)
-chk "mai loggato: logged_in=0"        "0" "$(field "$u" logged_in)"
-chk "mai loggato: nessuna percentuale" ""  "$(field "$u" five_hour_pct)"
+u=$($CLI usage --porcelain nologin)
+chk "never logged in: logged_in=0"    "0" "$(field "$u" logged_in)"
+chk "never logged in: no percentages"  ""  "$(field "$u" five_hour_pct)"
 
 chk "corrupt json does not break"  "0" "$($CLI usage --porcelain broken >/dev/null 2>&1; echo $?)"
 chk "corrupt json: no data" ""  "$(field "$($CLI usage --porcelain broken)" five_hour_pct)"
@@ -203,24 +203,24 @@ chk "usage slot missing"   "1" "$($CLI usage --porcelain ghost >/dev/null 2>&1; 
 
 echo "--- 13. list --porcelain: columns appended at the end"
 l=$($CLI list --porcelain | head -1)
-chk "6 colonne"        "6" "$(printf '%s' "$l" | awk -F'\t' '{print NF}')"
-chk "colonna 1 invariata" "default" "$(printf '%s' "$l" | cut -f1)"
-chk "colonna 3 invariata" "$HOME/.claude" "$(printf '%s' "$l" | cut -f3)"
+chk "6 columns"        "6" "$(printf '%s' "$l" | awk -F'\t' '{print NF}')"
+chk "column 1 unchanged"  "default" "$(printf '%s' "$l" | cut -f1)"
+chk "column 3 unchanged"  "$HOME/.claude" "$(printf '%s' "$l" | cut -f3)"
 chk "logged_in"        "1" "$(printf '%s' "$l" | cut -f5)"
 chk "keychain default with no suffix" "Claude Code-credentials" "$(printf '%s' "$l" | cut -f6)"
 chk "keychain slot with hash" "Claude Code-credentials-$(printf '%s' "$HOME/.claude-accounts/work" | shasum -a 256 | cut -c1-8)" \
     "$($CLI list --porcelain | grep '^work	' | cut -f6)"
 
 echo "--- 14. login-cmd"
-chk "default: nessuna CLAUDE_CONFIG_DIR" "claude auth login" "$($CLI login-cmd default)"
+chk "default: no CLAUDE_CONFIG_DIR"      "claude auth login" "$($CLI login-cmd default)"
 chk "slot: with CLAUDE_CONFIG_DIR" "CLAUDE_CONFIG_DIR=$HOME/.claude-accounts/work claude auth login" \
     "$($CLI login-cmd work)"
 chk "slot missing" "1" "$($CLI login-cmd ghost >/dev/null 2>&1; echo $?)"
 
 echo "--- 15. rename"
-chk "rename default rifiutato"    "1" "$($CLI rename default x >/dev/null 2>&1; echo $?)"
-chk "rename verso default rifiutato" "1" "$($CLI rename work default >/dev/null 2>&1; echo $?)"
-chk "rename su nome esistente"    "1" "$($CLI rename work noextra >/dev/null 2>&1; echo $?)"
+chk "rename default rejected"     "1" "$($CLI rename default x >/dev/null 2>&1; echo $?)"
+chk "rename to default rejected"     "1" "$($CLI rename work default >/dev/null 2>&1; echo $?)"
+chk "rename onto an existing name" "1" "$($CLI rename work noextra >/dev/null 2>&1; echo $?)"
 chk "rename nonexistent"          "1" "$($CLI rename ghost x >/dev/null 2>&1; echo $?)"
 $CLI use work "$HOME/proj/beta" >/dev/null
 out=$($CLI rename work office 2>&1)
@@ -247,7 +247,7 @@ $CLI rm work >/dev/null 2>&1
 chk "slot removed"      ""  "$([ -d "$HOME/.claude-accounts/work" ] && echo yes)"
 chk "override cleaned up" ""  "$([ -f "$ovbeta" ] && echo yes)"
 # the two load-bearing assertions: rm -rf must not follow symlinks into ~/.claude
-chk "symlink target intact" "istruzioni" "$(cat "$HOME/.claude/CLAUDE.md")"
+chk "symlink target intact" "instructions" "$(cat "$HOME/.claude/CLAUDE.md")"
 chk "~/.claude survives"       "yes" "$([ -d "$HOME/.claude" ] && echo yes)"
 chk "default skills intact" "yes" "$([ -d "$HOME/.claude/skills" ] && echo yes)"
 
@@ -259,7 +259,7 @@ chk "--live with no credentials: exit 0" "0" "$($CLI usage --live --porcelain de
 chk "--live marked as cached"  "0"  "$(field "$u" live)"
 chk "--live keeps the cached data" "3" "$(field "$u" five_hour_pct)"
 chk "cache: live=0"              "0"  "$(field "$($CLI usage --porcelain default)" live)"
-chk "--live on never-logged-in"      "0"  "$($CLI usage --live --porcelain mailoggato >/dev/null 2>&1; echo $?)"
+chk "--live on never-logged-in"      "0"  "$($CLI usage --live --porcelain nologin >/dev/null 2>&1; echo $?)"
 
 echo "--- 18. start folder: pin, read back, clear"
 mkdir -p "$HOME/root A" "$HOME/rootB"
@@ -295,8 +295,8 @@ chk "account stays the window's" "$HOME/.claude-accounts/work" \
 rm -rf "$HOME/root A"
 chk "pin at a missing folder: stays put" "$(cd "$HOME/proj/alpha" && pwd -P)" \
   "$(cd "$HOME/proj/alpha" && $WRAP /bin/sh -c 'pwd -P')"
-chk "pin at a missing folder: still starts" "avviato" \
-  "$(cd "$HOME/proj/alpha" && $WRAP /bin/echo avviato 2>/dev/null)"
+chk "pin at a missing folder: still starts" "started" \
+  "$(cd "$HOME/proj/alpha" && $WRAP /bin/echo started 2>/dev/null)"
 $CLI clear-cwd "$HOME/proj/alpha" >/dev/null
 $CLI rm work --force >/dev/null 2>&1
 

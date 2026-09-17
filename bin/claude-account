@@ -189,7 +189,7 @@ usage_fields() {
       const o = d.oauthAccount || {}, c = d.cachedUsageUtilization || {};
       const u = L ? (L.utilization || L) : (c.utilization || {});
       const p = (k, v) => { if (v !== undefined && v !== null) console.log(k + "=" + v); else console.log(k + "="); };
-      // le percentuali arrivano float dall API (2.0) e intere dalla cache
+      // percentages come back float from the API (2.0) and integer from the cache
       const r = (v) => (v == null ? null : Math.round(Number(v)));
       p("email", o.emailAddress); p("display_name", o.displayName); p("org_name", o.organizationName);
       p("plan", o.organizationType); p("tier", o.organizationRateLimitTier);
@@ -573,7 +573,7 @@ cmd_new() {
   done
 
   printf 'created %s (config shared with %s via symlinks)\n' "$dst" "$DEFAULT_DIR"
-  printf 'ora fai il login:\n  CLAUDE_CONFIG_DIR=%s claude auth login\n' "$dst"
+  printf 'now log in:\n  CLAUDE_CONFIG_DIR=%s claude auth login\n' "$dst"
 }
 
 cmd_use() {

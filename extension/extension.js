@@ -12,11 +12,11 @@ const path = require('path');
 const CLAUDE_NEW_CONVERSATION = 'claude-vscode.newConversation';
 
 let item;                 // StatusBarItem
-let state = null;         // ultimo risultato di `claude-account status`
+let state = null;         // last result of `claude-account status`
 let pendingSwitch = false; // switched, but no new conversation opened yet
 let watchers = [];
 let panel = null;         // AccountsViewProvider, if the view has been created
-let usageCache = [];      // ultimo `claude-account usage --porcelain`
+let usageCache = [];      // last `claude-account usage --porcelain`
 
 // ---------------------------------------------------------------- CLI
 
@@ -59,7 +59,7 @@ function parseKeyValue(out) {
   return o;
 }
 
-// ---------------------------------------------------------------- finestra
+// ---------------------------------------------------------------- window
 
 // The CLI canonicalizes paths the same way (abspath), and both sides derive the
 // same slug from the result: diverge here and an override written by the extension
@@ -137,11 +137,11 @@ function staleAfterMs() {
 function formatAge(ms) {
   if (!ms) return null;
   const min = Math.floor((Date.now() - Number(ms)) / 60000);
-  if (min < 1) return 'adesso';
-  if (min < 60) return `${min} min fa`;
-  if (min < 1440) return `${Math.floor(min / 60)}h fa`;
+  if (min < 1) return 'just now';
+  if (min < 60) return `${min} min ago`;
+  if (min < 1440) return `${Math.floor(min / 60)}h ago`;
   const d = Math.floor(min / 1440);
-  return d === 1 ? 'ieri' : `${d} giorni fa`;
+  return d === 1 ? 'yesterday' : `${d} days ago`;
 }
 
 function formatCountdown(iso) {
@@ -249,7 +249,7 @@ async function refresh() {
   item.show();
 }
 
-// ---------------------------------------------------------------- pannello
+// ---------------------------------------------------------------- panel
 
 const esc = (s) =>
   String(s ?? '').replace(/[&<>"']/g, (c) =>
@@ -445,8 +445,8 @@ function panelHtml(webview, records, current, projectPath, sessionCwd) {
   .xtra .of { font-weight: 400; color: var(--vscode-descriptionForeground); }
   .none { margin-top: 8px; color: var(--vscode-descriptionForeground); }
 
-  /* Le azioni compaiono in hover: a riposo la card mostra solo dati.
-     Restano sempre visibili da tastiera (:focus-within) e su schermi touch. */
+  /* Actions appear on hover: at rest the card shows data only. They stay reachable
+     from the keyboard (:focus-within) and on touch screens. */
   .acts {
     display: flex; align-items: center; gap: 4px; flex-wrap: wrap;
     margin-top: 10px; opacity: .0;
@@ -517,9 +517,9 @@ function panelHtml(webview, records, current, projectPath, sessionCwd) {
     aria-label="Change the folder the session starts in">${ICON.folder}</button>
 </div>
 ${cards}
-<button class="add" data-a="new">+ Nuovo account</button>
+<button class="add" data-a="new">+ New account</button>
 ${foot ? `<div class="foot"><span>${esc(foot)}</span>
-  <button class="ico" data-a="live" title="Aggiorna dall'API" aria-label="Aggiorna i consumi">${ICON.refresh}</button>
+  <button class="ico" data-a="live" title="Refresh from the API" aria-label="Refresh usage">${ICON.refresh}</button>
 </div>` : ''}
 <script nonce="${nonce}">
   const vs = acquireVsCodeApi();
@@ -604,7 +604,7 @@ async function moreActions(name) {
 async function openLogin(name) {
   const cmd = await runCli(['login-cmd', name]);
   if (!cmd) {
-    vscode.window.showErrorMessage(`Non ho la riga di login per "${name}".`);
+    vscode.window.showErrorMessage(`No login line available for "${name}".`);
     return;
   }
   const term = vscode.window.createTerminal({ name: `claude login: ${name}` });
