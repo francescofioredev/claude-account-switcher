@@ -1,0 +1,36 @@
+name: Bug report
+description: Something does not work the way the README says it should.
+labels: [bug]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you did, what you expected, what you got instead.
+    validations:
+      required: true
+  - type: textarea
+    id: status
+    attributes:
+      label: Output of `claude-account status`
+      description: >
+        Run it from inside the affected project. It says which account resolves and why,
+        which is usually the whole answer. Redact the email if you would rather not share it.
+      render: shell
+    validations:
+      required: true
+  - type: input
+    id: versions
+    attributes:
+      label: Versions
+      description: macOS, VS Code, the Claude Code extension, and this project's version or commit.
+      placeholder: macOS 15.3, VS Code 1.96, claude-code 2.1.273, claude-account-switcher 0.3.0
+    validations:
+      required: true
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Before filing
+      options:
+        - label: "`sh test/run-tests.sh` passes on my machine"
+        - label: "`claudeCode.claudeProcessWrapper` is set in my **user** settings, not workspace settings"

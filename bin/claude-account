@@ -621,7 +621,7 @@ cmd_help() {
 claude-account — one Claude Code account per project
 
   resolve [path]        print the config dir to use (empty = default account)
-  status  [path]        account / config_dir / source / path / email
+  status  [path]        account / config_dir / source / path / email / cwd
   list                  available accounts and who is logged in to each
   usage [--live] [name] usage (5h, 7 days, credit). --live asks the API
   new <name>            create the slot ~/.claude-accounts/<name>
