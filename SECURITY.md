@@ -42,3 +42,14 @@ refreshed rarely and can be many hours stale.
 into `~/.claude` for shared config. `rm` refuses to delete a slot containing real copies of
 shared config rather than symlinks, unless given `--force`, and never follows a symlink out of
 the slot.
+
+**Shared accounts.** For an account with `share` on, every launch reads `~/.claude.json` and
+copies a fixed list of keys into the account's own `.claude.json`: MCP servers, folder trust,
+tool permissions, GitHub repo paths and two Chrome flags. OAuth data, identity, tokens and
+caches are never copied. The file is written atomically, with mode 0600, and only when
+something changed.
+
+Sharing also links the account's `sessions/` to `~/.claude/sessions/`, the registry Claude
+Code uses to let sessions find and message each other. Sessions on the default account and
+on every shared account can then see and message one another. They all run as the same OS
+user, so this grants no new file access, but it does cross the line between accounts.

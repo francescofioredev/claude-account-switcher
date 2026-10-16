@@ -22,6 +22,9 @@ current project and lets you change it.
 - **Start folder** — pick which workspace root the session runs in, so its `CLAUDE.md`, hooks,
   skills and commands are the ones that apply. Independent of the account, which keeps being
   resolved from the folder the editor launched Claude in.
+- **Sharing** — a toggle on each logged-in account other than the default, to share its
+  sessions, plans and local MCP servers with the default account. See
+  [Sharing sessions and plans](https://github.com/francescofioredev/claude-account-switcher#sharing-sessions-and-plans).
 
 ## Requirements
 
