@@ -12,10 +12,13 @@ _claude_account_sync() {
   dir="$(claude-account resolve "$PWD" 2>/dev/null)"
   if [[ -n $dir ]]; then
     export CLAUDE_CONFIG_DIR="$dir"
+    # the merge spawns jq or node: only on entering another account's tree
+    [[ $dir != ${_claude_account_last:-} ]] && claude-account sync-json "$dir" >/dev/null 2>&1
   else
     # unset, not "=default": setting it would change the Keychain namespace
     unset CLAUDE_CONFIG_DIR
   fi
+  _claude_account_last=$dir
 }
 
 autoload -Uz add-zsh-hook

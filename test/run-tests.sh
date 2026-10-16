@@ -203,13 +203,14 @@ chk "usage slot missing"   "1" "$($CLI usage --porcelain ghost >/dev/null 2>&1; 
 
 echo "--- 13. list --porcelain: columns appended at the end"
 l=$($CLI list --porcelain | head -1)
-chk "6 columns"        "6" "$(printf '%s' "$l" | awk -F'\t' '{print NF}')"
+chk "7 columns"        "7" "$(printf '%s' "$l" | awk -F'\t' '{print NF}')"
 chk "column 1 unchanged"  "default" "$(printf '%s' "$l" | cut -f1)"
 chk "column 3 unchanged"  "$HOME/.claude" "$(printf '%s' "$l" | cut -f3)"
 chk "logged_in"        "1" "$(printf '%s' "$l" | cut -f5)"
 chk "keychain default with no suffix" "Claude Code-credentials" "$(printf '%s' "$l" | cut -f6)"
 chk "keychain slot with hash" "Claude Code-credentials-$(printf '%s' "$HOME/.claude-accounts/work" | shasum -a 256 | cut -c1-8)" \
     "$($CLI list --porcelain | grep '^work	' | cut -f6)"
+chk "shared column, off by default" "0" "$($CLI list --porcelain | grep '^work	' | cut -f7)"
 
 echo "--- 14. login-cmd"
 chk "default: no CLAUDE_CONFIG_DIR"      "claude auth login" "$($CLI login-cmd default)"
@@ -299,6 +300,101 @@ chk "pin at a missing folder: still starts" "started" \
   "$(cd "$HOME/proj/alpha" && $WRAP /bin/echo started 2>/dev/null)"
 $CLI clear-cwd "$HOME/proj/alpha" >/dev/null
 $CLI rm work --force >/dev/null 2>&1
+
+echo "--- 20. share: sessions, plans and .claude.json keys"
+mkdir -p "$HOME/.claude/plans"
+printf 'default plan\n' > "$HOME/.claude/plans/same.md"
+$CLI new pre >/dev/null 2>&1
+mkdir -p "$HOME/.claude-accounts/pre/plans" "$HOME/.claude-accounts/pre/sessions" \
+  "$HOME/.claude-accounts/pre/file-history/sid/a" "$HOME/.claude/file-history/sid"
+printf 'slot plan\n' > "$HOME/.claude-accounts/pre/plans/only-slot.md"
+printf 'slot copy\n' > "$HOME/.claude-accounts/pre/plans/same.md"
+printf 'v1\n' > "$HOME/.claude-accounts/pre/file-history/sid/a/x@v1"
+printf '{"pid":%s,"sessionId":"live"}' "$$" > "$HOME/.claude-accounts/pre/sessions/$$.json"
+chk "share refuses with a live session" "1" "$($CLI share pre on >/dev/null 2>&1; echo $?)"
+chk "refusal leaves sessions real" "" "$([ -L "$HOME/.claude-accounts/pre/sessions" ] && echo yes)"
+chk "--force goes through" "0" "$($CLI share pre on --force >/dev/null 2>&1; echo $?)"
+for f in sessions plans file-history session-env shell-snapshots; do
+  chk "$f linked" "$HOME/.claude/$f" "$(readlink "$HOME/.claude-accounts/pre/$f")"
+done
+chk "plan migrated"            "slot plan"    "$(cat "$HOME/.claude/plans/only-slot.md")"
+chk "colliding plan untouched" "default plan" "$(cat "$HOME/.claude/plans/same.md")"
+chk "collision kept aside"     "slot copy"    "$(cat "$HOME/.claude-accounts/pre/plans.pre-share/same.md")"
+chk "same session id merged"   "v1"           "$(cat "$HOME/.claude/file-history/sid/a/x@v1")"
+chk "empty backups removed"    ""  "$([ -e "$HOME/.claude-accounts/pre/file-history.pre-share" ] && echo yes)"
+chk "session registry moved"   "yes" "$([ -f "$HOME/.claude/sessions/$$.json" ] && echo yes)"
+chk "share reports on"         "shared=1" "$($CLI share pre)"
+$CLI use pre "$HOME/proj/beta" >/dev/null
+chk "status reports shared"    "1" "$(field "$($CLI status "$HOME/proj/beta")" shared)"
+chk "porcelain column 7"       "1" "$($CLI list --porcelain | grep '^pre	' | cut -f7)"
+chk "usage reports shared"     "1" "$(field "$($CLI usage --porcelain pre)" shared)"
+chk "share on is idempotent"   "0" "$($CLI share pre on >/dev/null 2>&1; echo $?)"
+chk "default cannot share"     "1" "$($CLI share default on >/dev/null 2>&1; echo $?)"
+chk "share on a missing slot"  "1" "$($CLI share ghost on >/dev/null 2>&1; echo $?)"
+
+cat > "$HOME/.claude.json" <<'JSON'
+{
+  "oauthAccount": { "emailAddress": "default@example.com" },
+  "userID": "default-user",
+  "mcpServers": { "neon": { "command": "neon-mcp" }, "both": { "command": "from-default" } },
+  "githubRepoPaths": { "acme/app": ["/a"] },
+  "claudeInChromeDefaultEnabled": true,
+  "projects": {
+    "/trusted": { "hasTrustDialogAccepted": true, "lastSessionId": "default-session", "allowedTools": ["Bash(ls)"] },
+    "/untouched": { "hasTrustDialogAccepted": false, "lastSessionId": "x" }
+  }
+}
+JSON
+cat > "$HOME/.claude-accounts/pre/.claude.json" <<'JSON'
+{
+  "oauthAccount": { "emailAddress": "pre@example.com" },
+  "userID": "pre-user",
+  "mcpServers": { "slot-only": { "command": "mine" }, "both": { "command": "from-slot" } },
+  "githubRepoPaths": { "acme/app": ["/b"] },
+  "projects": { "/trusted": { "lastSessionId": "slot-session", "allowedTools": ["Read"] } }
+}
+JSON
+j="$HOME/.claude-accounts/pre/.claude.json"
+jget() { node -e 'const j=JSON.parse(require("fs").readFileSync(process.argv[1],"utf8"));const v=eval("j"+process.argv[2]);process.stdout.write(typeof v==="object"?JSON.stringify(v):String(v))' "$1" "$2"; }
+(cd "$HOME/proj/beta" && $WRAP /bin/echo started >/dev/null 2>&1)
+chk "wrapper merges a default MCP server" "neon-mcp" "$(jget "$j" '.mcpServers.neon.command')"
+chk "default wins a name clash"   "from-default" "$(jget "$j" '.mcpServers.both.command')"
+chk "slot-only server kept"       "mine" "$(jget "$j" '.mcpServers["slot-only"].command')"
+chk "identity untouched"          "pre@example.com" "$(jget "$j" '.oauthAccount.emailAddress')"
+chk "userID untouched"            "pre-user" "$(jget "$j" '.userID')"
+chk "repo paths unioned"          '["/b","/a"]' "$(jget "$j" '.githubRepoPaths["acme/app"]')"
+chk "chrome flag copied"          "true" "$(jget "$j" '.claudeInChromeDefaultEnabled')"
+chk "trust copied"                "true" "$(jget "$j" '.projects["/trusted"].hasTrustDialogAccepted')"
+chk "allowed tools unioned"       '["Read","Bash(ls)"]' "$(jget "$j" '.projects["/trusted"].allowedTools')"
+chk "session pointer untouched"   "slot-session" "$(jget "$j" '.projects["/trusted"].lastSessionId')"
+chk "untrusted project not copied" "undefined" "$(jget "$j" '.projects["/untouched"]')"
+chk "file stays private"          "600" "$(stat -f %Lp "$j")"
+before=$(ls -i "$j")
+$CLI sync-json pre
+chk "no rewrite when nothing changed" "$before" "$(ls -i "$j")"
+chk "sync-json takes a config dir" "0" "$($CLI sync-json "$HOME/.claude-accounts/pre" >/dev/null 2>&1; echo $?)"
+
+printf '{ broken' > "$j"
+chk "broken slot json: wrapper still starts" "started" \
+  "$(cd "$HOME/proj/beta" && $WRAP /bin/echo started 2>/dev/null)"
+chk "broken slot json left alone" "{ broken" "$(cat "$j")"
+chk "no temp files left behind" "0" "$(ls "$HOME/.claude-accounts/pre" | grep -c '^\.claude\.json\.')"
+
+$CLI share pre off >/dev/null 2>&1
+chk "off: real dir again" "dir" "$([ -d "$HOME/.claude-accounts/pre/plans" ] && [ ! -L "$HOME/.claude-accounts/pre/plans" ] && echo dir)"
+chk "off: history stays in ~/.claude" "slot plan" "$(cat "$HOME/.claude/plans/only-slot.md")"
+chk "share reports off" "shared=0" "$($CLI share pre)"
+printf '{"mcpServers":{}}' > "$j"
+$CLI sync-json pre
+chk "not shared: sync-json is a no-op" '{"mcpServers":{}}' "$(cat "$j")"
+
+$CLI new fresh --share >/dev/null 2>&1
+chk "new --share links sessions" "$HOME/.claude/sessions" "$(readlink "$HOME/.claude-accounts/fresh/sessions")"
+$CLI rm fresh >/dev/null 2>&1
+chk "rm of a shared slot keeps ~/.claude/plans" "slot plan" "$(cat "$HOME/.claude/plans/only-slot.md")"
+chk "rm of a shared slot keeps the registry" "yes" "$([ -f "$HOME/.claude/sessions/$$.json" ] && echo yes)"
+$CLI clear "$HOME/proj/beta" >/dev/null
+$CLI rm pre --force >/dev/null 2>&1
 
 printf '\n%s passed, %s failed\n' "$pass" "$fail"
 rm -rf "$T"

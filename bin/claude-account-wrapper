@@ -19,6 +19,8 @@ dir=$("$(dirname "$0")/claude-account" resolve "$PWD" 2>/dev/null) || dir=
 if [ -n "$dir" ]; then
   CLAUDE_CONFIG_DIR="$dir"
   export CLAUDE_CONFIG_DIR
+  # a no-op unless the slot shares state with the default
+  "$(dirname "$0")/claude-account" sync-json "$dir" >/dev/null 2>&1
 else
   unset CLAUDE_CONFIG_DIR
 fi

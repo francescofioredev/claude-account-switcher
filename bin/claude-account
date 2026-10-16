@@ -14,7 +14,7 @@
 
 set -u
 
-VERSION=0.3.0
+VERSION=0.4.0
 REPO_URL="https://github.com/francescofioredev/claude-account-switcher"
 
 ACCOUNTS="$HOME/.claude-accounts"
@@ -29,6 +29,11 @@ CWDS="$CONF/cwd"
 # sessions/, session-env/, shell-snapshots/, file-history/, history.jsonl,
 # backups/, cache/, telemetry/.
 SHARED="CLAUDE.md settings.json settings.local.json skills agents commands plugins hooks projects"
+
+# Local session state a slot shares with ~/.claude only after `share <name> on`.
+# sessions/ is the live registry ListAgents and SendMessage read: shared, peers on
+# both accounts see each other. The symlink on sessions/ is the on/off flag itself.
+SHARED_STATE="sessions plans file-history session-env shell-snapshots"
 
 ACCOUNT=default
 RESOLVED=
@@ -147,6 +152,12 @@ keychain_service_of() {
       "$(printf '%s' "$(dir_of "$1")" | shasum -a 256 | cut -c1-8)"
   fi
 }
+
+is_shared() {
+  [ "$1" != default ] && [ -L "$ACCOUNTS/$1/sessions" ]
+}
+
+shared_of() { if is_shared "$1"; then printf 1; else printf 0; fi; }
 
 # The usage fields are nested in .claude.json, which is pretty-printed: sed and awk
 # are not enough (an awk extractor truncates resets_at at the "+00:00" and matches
@@ -330,10 +341,11 @@ cmd_status() {
   printf 'path=%s\n' "$(abspath "${1:-$PWD}")"
   printf 'email=%s\n' "$(email_of "$ACCOUNT")"
   printf 'cwd=%s\n' "$(session_cwd "${1:-}")"
+  printf 'shared=%s\n' "$(shared_of "$ACCOUNT")"
 }
 
 # list           human-readable table
-# list --porcelain   <name>TAB<email>TAB<config_dir>TAB<json>TAB<logged>TAB<keychain>,
+# list --porcelain   <name>TAB<email>TAB<config_dir>TAB<json>TAB<logged>TAB<keychain>TAB<shared>,
 #                    for the extension: knowing where each .claude.json lives stays
 #                    this script's job alone. Columns are APPENDED at the end, never
 #                    reordered: the extension destructures them by position.
@@ -352,8 +364,9 @@ _row() {
   email=$(email_of "$1")
   if [ "${2:-human}" = "--porcelain" ]; then
     [ -n "$email" ] && logged=1 || logged=0
-    printf '%s\t%s\t%s\t%s\t%s\t%s\n' \
-      "$1" "$email" "$(dir_of "$1")" "$(json_of "$1")" "$logged" "$(keychain_service_of "$1")"
+    printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+      "$1" "$email" "$(dir_of "$1")" "$(json_of "$1")" "$logged" "$(keychain_service_of "$1")" \
+      "$(shared_of "$1")"
   else
     [ -n "$email" ] || email="(never logged in)"
     printf '%-14s %-38s %s\n' "$1" "$email" "$(dir_of "$1")"
@@ -401,6 +414,7 @@ cmd_usage() {
       printf 'name=%s\n' "$n"
       printf 'config_dir=%s\n' "$(dir_of "$n")"
       printf 'logged_in=%s\n' "$logged"
+      printf 'shared=%s\n' "$(shared_of "$n")"
       if [ "$logged" = 1 ]; then usage_fields "$n" "$live"; else printf 'email=\n'; fi
       printf -- '---\n'
     else
@@ -559,8 +573,11 @@ cmd_rename() {
 }
 
 cmd_new() {
-  name=${1:-}
-  [ -n "$name" ] || die "usage: claude-account new <name>"
+  name=; share=0
+  for a in "$@"; do
+    case "$a" in --share) share=1 ;; *) name=$a ;; esac
+  done
+  [ -n "$name" ] || die "usage: claude-account new <name> [--share]"
   case "$name" in default) die "'default' is reserved: it is the account in $DEFAULT_DIR" ;; esac
   case "$name" in .*|*/*) die "invalid name: $name" ;; esac
   [ -d "$DEFAULT_DIR" ] || die "$DEFAULT_DIR not found: has Claude Code ever been started?"
@@ -573,7 +590,164 @@ cmd_new() {
   done
 
   printf 'created %s (config shared with %s via symlinks)\n' "$dst" "$DEFAULT_DIR"
+  [ "$share" = 1 ] && share_on "$name" 0
   printf 'now log in:\n  CLAUDE_CONFIG_DIR=%s claude auth login\n' "$dst"
+}
+
+# Pids of the sessions registered in a sessions/ dir that are still running.
+live_pids() {
+  for s in "$1"/*.json; do
+    [ -f "$s" ] || continue
+    pid=$(sed -n 's/.*"pid"[[:space:]]*:[[:space:]]*\([0-9][0-9]*\).*/\1/p' "$s" | head -1)
+    [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null && printf ' %s' "$pid"
+  done
+  return 0
+}
+
+# Move what $1 holds into $2 without overwriting anything. A dir present on both
+# sides is merged one level down: a session resumed on both accounts has a
+# file-history/<id> in each. Whatever collides stays in $1.
+merge_into() {
+  mkdir -p "$2" || return 1
+  for e in "$1"/* "$1"/.[!.]*; do
+    [ -e "$e" ] || [ -L "$e" ] || continue
+    t="$2/$(basename "$e")"
+    if [ ! -e "$t" ] && [ ! -L "$t" ]; then
+      mv "$e" "$t"
+    elif [ -d "$e" ] && [ ! -L "$e" ] && [ -d "$t" ] && [ ! -L "$t" ]; then
+      # subshell: the loop variables are globals in sh and recursion would clobber them
+      ( merge_into "$e" "$t" )
+    fi
+  done
+  return 0
+}
+
+share_on() {
+  dst="$ACCOUNTS/$1"
+  if [ "$2" = 0 ] && [ -d "$dst/sessions" ] && [ ! -L "$dst/sessions" ]; then
+    live=$(live_pids "$dst/sessions")
+    [ -n "$live" ] && die "$1 has running sessions (pid$live). Close them first, or pass --force."
+  fi
+  for f in $SHARED_STATE; do
+    [ -L "$dst/$f" ] && continue
+    mkdir -p "$DEFAULT_DIR/$f" || die "cannot create $DEFAULT_DIR/$f"
+    if [ -d "$dst/$f" ]; then
+      bak="$dst/$f.pre-share"
+      [ -e "$bak" ] && die "$bak already exists: merge or remove it first"
+      mv "$dst/$f" "$bak" || die "cannot move $dst/$f"
+      merge_into "$bak" "$DEFAULT_DIR/$f"
+      find "$bak" -depth -type d -empty -exec rmdir {} \; 2>/dev/null
+      [ -e "$bak" ] && printf 'kept in %s: entries already present in %s\n' "$bak" "$DEFAULT_DIR/$f"
+    elif [ -e "$dst/$f" ]; then
+      die "$dst/$f is not a directory"
+    fi
+    ln -s "$DEFAULT_DIR/$f" "$dst/$f" || die "cannot link $dst/$f"
+  done
+  sync_json "$1"
+  printf '%s now shares sessions and plans with %s\n' "$1" "$DEFAULT_DIR"
+}
+
+# Back to empty dirs of its own. What was written while shared stays in ~/.claude.
+share_off() {
+  dst="$ACCOUNTS/$1"
+  for f in $SHARED_STATE; do
+    [ -L "$dst/$f" ] || continue
+    rm "$dst/$f" && mkdir "$dst/$f" || die "cannot unlink $dst/$f"
+  done
+  printf '%s no longer shares sessions and plans (history so far stays in %s)\n' "$1" "$DEFAULT_DIR"
+}
+
+cmd_share() {
+  name=; mode=; force=0
+  for a in "$@"; do
+    case "$a" in --force) force=1 ;; on|off) mode=$a ;; *) name=$a ;; esac
+  done
+  [ -n "$name" ] || die "usage: claude-account share <name> [on|off] [--force]"
+  case "$name" in default) die "'default' is the account the others share with" ;; esac
+  case "$name" in .*|*/*) die "invalid name: $name" ;; esac
+  [ -d "$ACCOUNTS/$name" ] || die "no such account: $name"
+  case "$mode" in
+    on)  share_on "$name" "$force" ;;
+    off) share_off "$name" ;;
+    *)   printf 'shared=%s\n' "$(shared_of "$name")" ;;
+  esac
+}
+
+# Keys of ~/.claude.json a shared slot takes over: local MCP servers, folder trust,
+# repo paths, the Chrome flags. Never identity, tokens, caches or session pointers.
+# The default wins on a name clash; what only the slot has is kept.
+SYNC_JQ='
+def union($a; $b): ($a // []) + (($b // []) - ($a // []));
+$D[0] as $d
+| (if ($d.mcpServers | type) == "object" then .mcpServers = ((.mcpServers // {}) + $d.mcpServers) else . end)
+| reduce (($d.githubRepoPaths // {}) | to_entries[]) as $e (.;
+    .githubRepoPaths[$e.key] = union(.githubRepoPaths[$e.key]; $e.value))
+| reduce ("claudeInChromeDefaultEnabled", "cachedChromeExtensionInstalled") as $k (.;
+    if ($d | has($k)) then .[$k] = $d[$k] else . end)
+| reduce (($d.projects // {}) | to_entries[]) as $p (.;
+    $p.value as $v
+    | (["allowedTools", "enabledMcpjsonServers", "disabledMcpjsonServers"]
+       | map(select((($v[.] // []) | length) > 0))) as $lists
+    | if $v.hasTrustDialogAccepted == true or (($v.mcpServers // {}) | length) > 0 or ($lists | length) > 0 then
+        .projects[$p.key] |= ((. // {})
+          | (if $v.hasTrustDialogAccepted == true then .hasTrustDialogAccepted = true else . end)
+          | (if (($v.mcpServers // {}) | length) > 0 then .mcpServers = ((.mcpServers // {}) + $v.mcpServers) else . end)
+          | reduce $lists[] as $k (.; .[$k] = union(.[$k]; $v[$k])))
+      else . end)
+'
+
+SYNC_NODE='
+const fs = require("fs");
+const d = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+const s = JSON.parse(fs.readFileSync(process.argv[2], "utf8"));
+const union = (a, b) => { a = a || []; return a.concat((b || []).filter((x) => !a.includes(x))); };
+const nonEmpty = (o) => o && typeof o === "object" && Object.keys(o).length > 0;
+if (d.mcpServers && typeof d.mcpServers === "object") s.mcpServers = { ...(s.mcpServers || {}), ...d.mcpServers };
+for (const [k, v] of Object.entries(d.githubRepoPaths || {})) {
+  s.githubRepoPaths = s.githubRepoPaths || {};
+  s.githubRepoPaths[k] = union(s.githubRepoPaths[k], v);
+}
+for (const k of ["claudeInChromeDefaultEnabled", "cachedChromeExtensionInstalled"]) if (k in d) s[k] = d[k];
+for (const [p, v] of Object.entries(d.projects || {})) {
+  const lists = ["allowedTools", "enabledMcpjsonServers", "disabledMcpjsonServers"].filter((k) => nonEmpty(v[k]));
+  if (v.hasTrustDialogAccepted !== true && !nonEmpty(v.mcpServers) && !lists.length) continue;
+  s.projects = s.projects || {};
+  const t = (s.projects[p] = s.projects[p] || {});
+  if (v.hasTrustDialogAccepted === true) t.hasTrustDialogAccepted = true;
+  if (nonEmpty(v.mcpServers)) t.mcpServers = { ...(t.mcpServers || {}), ...v.mcpServers };
+  for (const k of lists) t[k] = union(t[k], v[k]);
+}
+process.stdout.write(JSON.stringify(s, null, 2));
+'
+
+# On Claude's startup path: every failure is a silent no-op.
+sync_json() {
+  is_shared "$1" || return 0
+  src="$HOME/.claude.json"; f="$ACCOUNTS/$1/.claude.json"
+  [ -f "$src" ] && [ -f "$f" ] || return 0
+  have_json || return 0
+  # same dir, so the mv below is an atomic rename; mktemp also makes it 0600
+  tmp=$(mktemp "$f.XXXXXX") || return 0
+  if [ "$JSON" = node ]; then
+    node -e "$SYNC_NODE" "$src" "$f" > "$tmp" 2>/dev/null &&
+      node -e 'const fs = require("fs"), r = (p) => JSON.stringify(JSON.parse(fs.readFileSync(p, "utf8")));
+        process.exit(r(process.argv[1]) === r(process.argv[2]) ? 0 : 3)' "$f" "$tmp" 2>/dev/null
+  else
+    "$JSON" --slurpfile D "$src" "$SYNC_JQ" "$f" > "$tmp" 2>/dev/null &&
+      { "$JSON" -e --slurpfile M "$tmp" '. == $M[0]' "$f" >/dev/null 2>&1 || (exit 3); }
+  fi
+  rc=$?
+  # rewriting an unchanged file would race Claude Code's own writes for nothing
+  if [ "$rc" = 3 ] && [ -s "$tmp" ]; then mv "$tmp" "$f"; else rm -f "$tmp"; fi
+  return 0
+}
+
+# Takes a name or a config dir, as the wrapper and the zsh hook hold the latter.
+cmd_sync_json() {
+  a=${1:-}
+  case "$a" in "$ACCOUNTS"/*) a=${a#"$ACCOUNTS"/}; a=${a%%/*} ;; esac
+  case "$a" in ''|default|.*|*/*) return 0 ;; esac
+  sync_json "$a"
 }
 
 cmd_use() {
@@ -624,7 +798,9 @@ claude-account — one Claude Code account per project
   status  [path]        account / config_dir / source / path / email / cwd
   list                  available accounts and who is logged in to each
   usage [--live] [name] usage (5h, 7 days, credit). --live asks the API
-  new <name>            create the slot ~/.claude-accounts/<name>
+  new <name> [--share]  create the slot ~/.claude-accounts/<name>
+  share <name> [on|off] [--force]
+                        share sessions, plans and local MCP servers with the default
   use <name|default> [path]   pin an account to that project
   clear [path]          remove the pin, back to the project default
   cwd [path]            print the folder the session starts in (empty = the path itself)
@@ -647,6 +823,11 @@ Keychain; if that fails it falls back to the cache.
 
 --live is opt-in: it only makes a network request when CLAUDE_ACCOUNT_USAGE_LIVE=1.
 Otherwise it returns cached values. See SECURITY.md.
+
+share on links the slot's sessions, plans and resume state to $DEFAULT_DIR,
+so sessions on both accounts see each other and plans follow a resumed session. At every
+launch the slot also takes the default's local MCP servers and folder trust from
+~/.claude.json. It refuses while the slot has running sessions, unless --force.
 EOF
 }
 
@@ -660,6 +841,8 @@ case "$cmd" in
   list)          cmd_list    "$@" ;;
   usage)         cmd_usage   "$@" ;;
   new)           cmd_new     "$@" ;;
+  share)         cmd_share   "$@" ;;
+  sync-json)     cmd_sync_json "$@" ;;
   use)           cmd_use     "$@" ;;
   clear)         cmd_clear   "$@" ;;
   cwd)           cmd_cwd     "$@" ;;
