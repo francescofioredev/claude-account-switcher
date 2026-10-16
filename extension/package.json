@@ -2,7 +2,7 @@
   "name": "claude-account-switcher",
   "displayName": "Claude Account Switcher",
   "description": "Show and switch the Claude Code account used in this window, like the git branch.",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "publisher": "francescofioredev",
   "license": "MIT",
   "repository": {

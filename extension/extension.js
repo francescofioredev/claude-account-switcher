@@ -30,17 +30,23 @@ function cliPath() {
   return 'claude-account';
 }
 
-function runCli(args, timeout, env) {
+// Keeps stderr for the callers that have to tell one refusal from another.
+function runCliResult(args, timeout, env) {
   return new Promise((resolve) => {
     cp.execFile(
       cliPath(),
       args,
       { timeout: timeout || 5000, env: env ? { ...process.env, ...env } : process.env },
-      (err, stdout) => {
-        resolve(err ? null : stdout);
+      (err, stdout, stderr) => {
+        resolve({ ok: !err, stdout: stdout || '', stderr: (stderr || '').trim() });
       }
     );
   });
+}
+
+async function runCli(args, timeout, env) {
+  const r = await runCliResult(args, timeout, env);
+  return r.ok ? r.stdout : null;
 }
 
 // The live lookup sends the account's OAuth token to api.anthropic.com, so it stays
@@ -72,11 +78,9 @@ function canonical(p) {
   }
 }
 
-// Must match the cwd the Claude Code extension uses to launch the process:
-// realpathSync(workspaceFolders[0] ?? homedir()).normalize('NFC').
-// In a multi-root workspace that is the FIRST folder of the .code-workspace; if we
-// computed anything else here, the status bar would show an account other than the
-// one actually in use.
+// Must match the cwd the Claude Code extension launches with:
+// realpathSync(workspaceFolders[0] ?? homedir()).normalize('NFC'), the FIRST folder
+// of a multi-root workspace. Anything else shows an account other than the one in use.
 function windowPath() {
   return canonical(vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? os.homedir());
 }
@@ -90,8 +94,8 @@ async function listAccounts() {
     .split('\n')
     .filter(Boolean)
     .map((line) => {
-      const [name, email, configDir, json] = line.split('\t');
-      return { name, email: email || '', configDir, json };
+      const [name, email, configDir, json, , , shared] = line.split('\t');
+      return { name, email: email || '', configDir, json, shared: shared === '1' };
     });
 }
 
@@ -292,6 +296,18 @@ function meter(label, p, resets, dim, active) {
   </div>`;
 }
 
+function shareRow(u, n) {
+  const on = u.shared === '1';
+  const tip =
+    'Shares live sessions, plans and resume state with the default account, ' +
+    'and takes its local MCP servers and folder trust.';
+  return `<div class="shr" title="${esc(tip)}">
+    <span>Shared sessions &amp; plans</span>
+    <button class="tgl${on ? ' on' : ''}" role="switch" aria-checked="${on}"
+      data-a="share" data-n="${n}" title="${esc(tip)}">${on ? 'On' : 'Off'}</button>
+  </div>`;
+}
+
 function card(u, current) {
   const isCurrent = u.name === current;
   const logged = u.logged_in === '1';
@@ -317,6 +333,7 @@ function card(u, current) {
       (u.extra_enabled === '1' && spend
         ? `<div class="xtra"><span>Extra credit</span><b>${esc(spend)}${cap ? ` <span class="of">of ${esc(cap)}</span>` : ''}</b></div>`
         : '') +
+      (u.name === 'default' ? '' : shareRow(u, n)) +
       `<div class="acts">
          <button data-a="relogin" data-n="${n}">Log in again</button>
          <button data-a="logout" data-n="${n}">Log out</button>
@@ -444,6 +461,22 @@ function panelHtml(webview, records, current, projectPath, sessionCwd) {
   .xtra b { font-weight: 600; color: var(--vscode-foreground); font-variant-numeric: tabular-nums; }
   .xtra .of { font-weight: 400; color: var(--vscode-descriptionForeground); }
   .none { margin-top: 8px; color: var(--vscode-descriptionForeground); }
+  .shr {
+    display: flex; justify-content: space-between; align-items: center; gap: 8px;
+    margin-top: 10px; padding-top: 8px;
+    border-top: 1px solid var(--vscode-panel-border);
+    color: var(--vscode-descriptionForeground);
+  }
+  button.tgl {
+    flex: none; min-width: 34px; padding: 3px 8px; font-size: 11px;
+    border-color: var(--vscode-panel-border); border-radius: 10px;
+    color: var(--vscode-descriptionForeground);
+  }
+  button.tgl.on {
+    border-color: transparent;
+    color: var(--vscode-button-foreground); background: var(--vscode-button-background);
+  }
+  button.tgl.on:hover { background: var(--vscode-button-hoverBackground); }
 
   /* Actions appear on hover: at rest the card shows data only. They stay reachable
      from the keyboard (:focus-within) and on touch screens. */
@@ -585,7 +618,47 @@ async function handleAction(m) {
       return chooseFolder();
     case 'more':
       return moreActions(m.name);
+    case 'share':
+      return toggleShare(m.name);
   }
+}
+
+async function toggleShare(name) {
+  const on = usageCache.find((r) => r.name === name)?.shared === '1';
+
+  if (on) {
+    const ok = await vscode.window.showWarningMessage(
+      `Stop sharing sessions and plans for "${name}"?\n\n` +
+        'It goes back to empty sessions and plans of its own. ' +
+        'What was written while shared stays in ~/.claude.',
+      { modal: true },
+      'Stop sharing'
+    );
+    if (!ok) return;
+  }
+
+  // Moving an existing history into ~/.claude can take longer than a plain lookup.
+  let r = await runCliResult(['share', name, on ? 'off' : 'on'], 30000);
+  if (!r.ok && !on && /has running sessions/.test(r.stderr)) {
+    const choice = await vscode.window.showWarningMessage(r.stderr, 'Force', 'Cancel');
+    if (choice !== 'Force') return;
+    const sure = await vscode.window.showWarningMessage(
+      `Share "${name}" while it has running sessions?\n\n` +
+        'Those sessions switch over to the shared sessions and plans mid-flight. ' +
+        'Closing them first is safer.',
+      { modal: true },
+      'Share anyway'
+    );
+    if (!sure) return;
+    r = await runCliResult(['share', name, 'on', '--force'], 30000);
+  }
+
+  await refreshAll();
+  if (!r.ok) {
+    vscode.window.showErrorMessage(r.stderr || `Could not change sharing for "${name}".`);
+    return;
+  }
+  vscode.window.showInformationMessage(r.stdout.trim().split('\n').join(' · '));
 }
 
 async function moreActions(name) {
@@ -771,7 +844,7 @@ async function switchAccount() {
   const current = state?.account;
   const items = accounts.map((a) => ({
     label: `${a.name === current ? '$(check) ' : '      '}${a.name}`,
-    description: a.email || '⚠ never logged in',
+    description: (a.email || '⚠ never logged in') + (a.shared ? ' · shared' : ''),
     detail: a.configDir,
     account: a.name,
   }));
