@@ -5,6 +5,25 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this
 project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.0] — 2026-10-16
+
+### Added
+
+- `share <name> on|off`: an account can share sessions, plans and resume state with the
+  default account. Its `sessions/`, `plans/`, `file-history/`, `session-env/` and
+  `shell-snapshots/` become symlinks to `~/.claude`, so sessions on both accounts see each
+  other and a plan follows a resumed session. Refuses while the account has running sessions,
+  unless given `--force`.
+- `new <name> --share` creates an account with sharing already on.
+- A shared account takes local MCP servers, folder trust, tool permissions and the Chrome
+  flags from `~/.claude.json` at every launch. Identity and tokens are never copied.
+- A toggle for sharing on each account card in the extension.
+
+### Changed
+
+- `list --porcelain` has a seventh column, `shared`; `usage --porcelain` and `status` print
+  `shared=`.
+
 ## [0.3.0] — 2026-09-17
 
 ### Added

@@ -99,7 +99,8 @@ tree at once — see [the three levels of precedence](#the-three-levels-of-prece
 
 | Command | What it does |
 |---|---|
-| `new <name>` | Create the slot `~/.claude-accounts/<name>`, sharing config with `~/.claude` via symlinks. |
+| `new <name> [--share]` | Create the slot `~/.claude-accounts/<name>`, sharing config with `~/.claude` via symlinks. `--share` also turns on `share`. |
+| `share <name> [on\|off] [--force]` | Share sessions, plans and local MCP config with the default account. Alone, prints `shared=0` or `1`. |
 | `list` | Every account and who is logged in to each. |
 | `login-cmd <name>` | Print the login line for an account. Printed, not run: the OAuth flow wants a terminal of your own. |
 | `logout <name>` | Log the account out and remove its Keychain credentials. |
@@ -123,6 +124,52 @@ the project does the same as naming it.
 `accounts` table still mentions it you get told, without the file being touched — it is
 hand-written. If it finds config inside the slot that was **copied** rather than symlinked it
 stops: those files are unique, and only `--force` deletes them.
+
+### Sharing sessions and plans
+
+```sh
+claude-account share work on    # or: claude-account new work --share
+claude-account share work       # shared=1
+claude-account share work off
+```
+
+Two sessions on different accounts could not see each other: `ListAgents` and `SendMessage`
+read the live session registry in `sessions/`, which was per account. Plans stayed behind
+too, so resuming a session on the other account lost its plan, and MCP servers added on the
+default account never showed up on the others.
+
+`share <name> on` symlinks the slot's `sessions/`, `plans/`, `file-history/`, `session-env/`
+and `shell-snapshots/` to the same folders in `~/.claude`. What the slot already had is moved
+over without overwriting anything; entries that collide stay in `<dir>.pre-share` and you are
+told so.
+
+At every launch, from the wrapper and the zsh hook, a shared slot also takes these keys from
+`~/.claude.json` into its own `.claude.json`:
+
+- top level: `mcpServers` (on a name clash the default's wins; servers only the slot has are
+  kept), `githubRepoPaths`, `claudeInChromeDefaultEnabled`, `cachedChromeExtensionInstalled`;
+- per project: `hasTrustDialogAccepted`, `mcpServers`, `allowedTools`,
+  `enabledMcpjsonServers`, `disabledMcpjsonServers`.
+
+Identity, tokens, caches and `lastSessionId` are never copied.
+
+Not shared, even when on:
+
+- **claude.ai connectors and Claude Design artifacts.** They belong to the claude.ai account,
+  not to anything on disk.
+- **`history.jsonl`, `ide/`, `daemon/`, `jobs/`, `scheduled-tasks/`.** Prompt history, IDE
+  connections and background work stay with the account that started them.
+
+Memory and transcripts were already shared before this: they live under `projects/`, which
+every slot links.
+
+`share on` refuses while the slot has running sessions, and names their pids: close them
+first. `--force` goes ahead anyway, and those sessions switch registry mid-flight. `share off`
+gives the slot empty folders of its own again; what was written while shared stays in
+`~/.claude`. `default` cannot share: it is the account the others share with.
+
+One caveat: Claude Code may rewrite `.claude.json` from memory and drop the merged keys. The
+next launch merges them again.
 
 ### Where the session starts
 
@@ -165,9 +212,13 @@ A new slot gets symlinks back into `~/.claude` for `CLAUDE.md`, `settings.json`,
 `settings.local.json`, `skills`, `agents`, `commands`, `plugins`, `hooks` and `projects`. Edit
 the `SHARED` list at the top of `bin/claude-account` to change what is shared.
 
-Everything account-specific or volatile stays separate: `.claude.json`, `ide/`, `sessions/`,
-`session-env/`, `shell-snapshots/`, `file-history/`, `history.jsonl`, `backups/`, `cache/`,
-`telemetry/`.
+`sessions/`, `plans/`, `file-history/`, `session-env/` and `shell-snapshots/` are separate
+unless you turn on [`share`](#sharing-sessions-and-plans), which links them too and merges
+part of `.claude.json`.
+
+Everything else account-specific or volatile always stays separate: the rest of
+`.claude.json`, `ide/`, `history.jsonl`, `daemon/`, `jobs/`, `scheduled-tasks/`, `backups/`,
+`cache/`, `telemetry/`.
 
 ## VS Code extension
 
@@ -175,9 +226,11 @@ In `extension/`. Shows the active account in the status bar and switches it with
 tooltip also says **why** that account is active — override, marker file, table or default.
 
 The Activity Bar panel has one card per account: usage over the last 5 hours and 7 days, when
-they reset, extra credit if enabled, and buttons to log in, log out, rename and delete. Above
-them sits the folder the session starts in, with a button to change it; when it is not the
-workspace root, the status bar names it too.
+they reset, extra credit if enabled, and buttons to log in, log out, rename and delete.
+Logged-in accounts other than the default also have a toggle for
+[sharing sessions and plans](#sharing-sessions-and-plans); if the account has running
+sessions it asks before forcing it. Above the cards sits the folder the session starts in,
+with a button to change it; when it is not the workspace root, the status bar names it too.
 
 ```sh
 cd extension
@@ -217,8 +270,9 @@ call fails for any reason the cached values are used instead, labelled as cached
   `claude-account rename`, which cleans up the old credentials and tells you to log in again.
 - **Setting `CLAUDE_CONFIG_DIR` to the default value is not the same as leaving it unset**, for
   the same reason. That is why the wrapper unsets it instead of setting it.
-- **MCP servers and connectors are per account.** User-scoped MCP servers and claude.ai
-  connectors have to be re-authorized on each account.
+- **MCP servers and connectors are per account.** claude.ai connectors always have to be
+  authorized on each account. User-scoped MCP servers do too, unless the account
+  [shares](#sharing-sessions-and-plans) with the default, which copies their config over.
 
 ## Troubleshooting
 
