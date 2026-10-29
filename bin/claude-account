@@ -179,6 +179,16 @@ key_of() {
 # Exact match: -d alone would also match "Work" for "work" on a case-insensitive disk.
 is_key() { [ -n "${1:-}" ] && _names | grep -qxF -- "$1"; }
 
+# Refuse a new key that an existing label already answers to: the key would win
+# and the alias would change meaning without a word.
+refuse_label_clash() {
+  [ -f "$LABELS" ] || return 0
+  while read -r k l || [ -n "$k" ]; do
+    [ -n "$l" ] && [ "$l" = "$1" ] && die "'$1' is already a label (of '$k'): clear it first with: claude-account label $k --clear"
+  done < "$LABELS"
+  return 0
+}
+
 # "label (key)" when labelled, else the key.
 shown_name() {
   l=$(label_of "$1")
@@ -618,6 +628,7 @@ cmd_rename() {
   case "$new" in .*|*/*) die "invalid name: $new" ;; esac
   [ -d "$ACCOUNTS/$old" ] || die "no such account: $old"
   [ -e "$ACCOUNTS/$new" ] && die "already exists: $new"
+  refuse_label_clash "$new"
 
   svc=$(keychain_service_of "$old")
   mv "$ACCOUNTS/$old" "$ACCOUNTS/$new" || die "cannot rename $old"
@@ -648,6 +659,7 @@ cmd_new() {
   [ -d "$DEFAULT_DIR" ] || die "$DEFAULT_DIR not found: has Claude Code ever been started?"
 
   dst="$ACCOUNTS/$name"
+  [ -d "$dst" ] || refuse_label_clash "$name"
   mkdir -p "$dst" || die "cannot create $dst"
   for f in $SHARED; do
     [ -e "$DEFAULT_DIR/$f" ] || continue

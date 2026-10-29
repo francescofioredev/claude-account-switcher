@@ -13,7 +13,7 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `~/.config/claude-account/labels`. The key stays the identity (`default` stays `default`
   for pins, session names and `resolve`); `list`, `status`, `usage` and the extension show the
   label next to it. `use`, `usage`, `login-cmd`, `logout`, `share` and `label` accept the label
-  in place of the key. `rename` carries it over and `rm` drops it.
+  in place of the key. `rename` carries it over and `rm` drops it. `new` and `rename` refuse a name that is already a label.
 
 ### Changed
 
