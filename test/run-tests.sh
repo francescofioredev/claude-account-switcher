@@ -13,12 +13,12 @@ WRAP="$REPO/bin/claude-account-wrapper"
 T=$(mktemp -d)
 export HOME="$T/home"
 unset XDG_CONFIG_HOME
-# rm, rename and logout call these: stubs keep the suite off the real login Keychain
+# rm, rename, logout and usage --live call these: stubs keep the suite off the real login Keychain
 mkdir -p "$T/stub"
 printf '#!/bin/sh\nexit 0\n' > "$T/stub/claude"
 printf '#!/bin/sh\nexit 1\n' > "$T/stub/security"
 chmod +x "$T/stub/claude" "$T/stub/security"
-PATH="$T/stub:$PATH"
+export PATH="$T/stub:$PATH"
 mkdir -p "$HOME/.claude/skills" "$HOME/.claude/agents" "$HOME/proj/alpha/sub" "$HOME/proj/beta" "$HOME/altro"
 printf 'instructions\n' > "$HOME/.claude/CLAUDE.md"
 # Claude Code's asymmetry: the default account's .claude.json sits BESIDE ~/.claude,
@@ -259,7 +259,7 @@ chk "~/.claude survives"       "yes" "$([ -d "$HOME/.claude" ] && echo yes)"
 chk "default skills intact" "yes" "$([ -d "$HOME/.claude/skills" ] && echo yes)"
 
 echo "--- 17. --live degrades to the cache"
-# the fake HOME has no Keychain entry: --live must fall back to the cache without
+# the stubbed security finds no token: --live must fall back to the cache without
 # errors and without passing the data off as fresh
 u=$($CLI usage --live --porcelain default)
 chk "--live with no credentials: exit 0" "0" "$($CLI usage --live --porcelain default >/dev/null 2>&1; echo $?)"
