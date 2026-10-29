@@ -23,6 +23,7 @@ CONF="${XDG_CONFIG_HOME:-$HOME/.config}/claude-account"
 ACCOUNTS_FILE="$CONF/accounts"
 OVERRIDES="$CONF/overrides"
 CWDS="$CONF/cwd"
+LABELS="$CONF/labels"
 
 # Files and directories of ~/.claude shared with every new slot via symlink.
 # Everything account-specific or volatile stays out: .claude.json, ide/,
@@ -151,6 +152,48 @@ keychain_service_of() {
     printf 'Claude Code-credentials-%s' \
       "$(printf '%s' "$(dir_of "$1")" | shasum -a 256 | cut -c1-8)"
   fi
+}
+
+# An account's display label, empty if none. File lines are "<key> <label>"; the
+# label may hold spaces. Display only: the key stays the identity everywhere.
+label_of() {
+  [ -f "$LABELS" ] || return 0
+  while read -r k l; do
+    [ "$k" = "$1" ] && { printf '%s' "$l"; return 0; }
+  done < "$LABELS"
+  return 0
+}
+
+# The key for a name the user typed: a key wins, else a label naming one account.
+# Prints it as-is when nothing matches so the caller's own check reports it.
+key_of() {
+  if [ "$1" = default ] || [ -d "$ACCOUNTS/$1" ]; then printf '%s' "$1"; return 0; fi
+  if [ -f "$LABELS" ]; then
+    while read -r k l; do
+      [ -n "$l" ] && [ "$l" = "$1" ] && { printf '%s' "$k"; return 0; }
+    done < "$LABELS"
+  fi
+  printf '%s' "$1"
+}
+
+# "label (key)" when labelled, else the key.
+shown_name() {
+  l=$(label_of "$1")
+  if [ -n "$l" ]; then printf '%s (%s)' "$l" "$1"; else printf '%s' "$1"; fi
+}
+
+# Rewrite the labels file without $1's line, adding "$1 $2" when $2 is given.
+write_label() {
+  mkdir -p "$CONF" || return 1
+  tmp=$(mktemp "$CONF/labels.XXXXXX") || return 1
+  if [ -f "$LABELS" ]; then
+    while read -r k l; do
+      [ -n "$k" ] && [ "$k" != "$1" ] && printf '%s %s\n' "$k" "$l"
+    done < "$LABELS" > "$tmp"
+  fi
+  [ -n "${2:-}" ] && printf '%s %s\n' "$1" "$2" >> "$tmp"
+  if [ -s "$tmp" ]; then mv "$tmp" "$LABELS"; else rm -f "$tmp" "$LABELS"; fi
+  return 0
 }
 
 is_shared() {
@@ -342,6 +385,7 @@ cmd_status() {
   printf 'email=%s\n' "$(email_of "$ACCOUNT")"
   printf 'cwd=%s\n' "$(session_cwd "${1:-}")"
   printf 'shared=%s\n' "$(shared_of "$ACCOUNT")"
+  printf 'label=%s\n' "$(label_of "$ACCOUNT")"
 }
 
 # list           human-readable table
@@ -349,27 +393,38 @@ cmd_status() {
 #                    for the extension: knowing where each .claude.json lives stays
 #                    this script's job alone. Columns are APPENDED at the end, never
 #                    reordered: the extension destructures them by position.
+#                    The eighth column is the label, empty when none.
 cmd_list() {
   fmt=${1:-human}
-  _row default "$fmt"
-  if [ -d "$ACCOUNTS" ]; then
-    for d in "$ACCOUNTS"/*; do
-      [ -d "$d" ] || continue
-      _row "$(basename "$d")" "$fmt"
-    done
+  w=14
+  if [ "$fmt" != "--porcelain" ]; then
+    w=$(_names | while IFS= read -r n; do c=$(shown_name "$n"); printf '%s\n' "${#c}"; done | sort -n | tail -1)
+    [ "${w:-0}" -lt 14 ] && w=14
   fi
+  _names | while IFS= read -r n; do _row "$n" "$fmt" "$w"; done
+}
+
+_names() {
+  printf 'default\n'
+  [ -d "$ACCOUNTS" ] || return 0
+  for d in "$ACCOUNTS"/*; do
+    [ -d "$d" ] && basename "$d"
+  done
+  return 0
 }
 
 _row() {
   email=$(email_of "$1")
   if [ "${2:-human}" = "--porcelain" ]; then
     [ -n "$email" ] && logged=1 || logged=0
-    printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+    printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
       "$1" "$email" "$(dir_of "$1")" "$(json_of "$1")" "$logged" "$(keychain_service_of "$1")" \
-      "$(shared_of "$1")"
+      "$(shared_of "$1")" "$(label_of "$1")"
   else
     [ -n "$email" ] || email="(never logged in)"
-    printf '%-14s %-38s %s\n' "$1" "$email" "$(dir_of "$1")"
+    nm=$(shown_name "$1")
+    while [ "${#nm}" -lt "${3:-14}" ]; do nm="$nm "; done
+    printf '%s %-38s %s\n' "$nm" "$email" "$(dir_of "$1")"
   fi
 }
 
@@ -391,6 +446,7 @@ cmd_usage() {
   done
 
   if [ -n "$who" ]; then
+    who=$(key_of "$who")
     [ "$who" = default ] || [ -d "$ACCOUNTS/$who" ] || die "no such account: $who"
     set -- "$who"
   else
@@ -415,6 +471,7 @@ cmd_usage() {
       printf 'config_dir=%s\n' "$(dir_of "$n")"
       printf 'logged_in=%s\n' "$logged"
       printf 'shared=%s\n' "$(shared_of "$n")"
+      printf 'label=%s\n' "$(label_of "$n")"
       if [ "$logged" = 1 ]; then usage_fields "$n" "$live"; else printf 'email=\n'; fi
       printf -- '---\n'
     else
@@ -426,12 +483,12 @@ cmd_usage() {
 
 _usage_human() {
   if [ "$2" = 0 ]; then
-    printf '%-14s (never logged in)\n' "$1"
+    printf '%-14s (never logged in)\n' "$(shown_name "$1")"
     return 0
   fi
   u=$(usage_fields "$1" "${3:-}")
   get() { printf '%s\n' "$u" | sed -n "s/^$1=//p" | head -1; }
-  printf '%-14s %s\n' "$1" "$(get email)"
+  printf '%-14s %s\n' "$(shown_name "$1")" "$(get email)"
   for w in five_hour:5h seven_day:7d; do
     k=${w%%:*}; lbl=${w##*:}
     p=$(get "${k}_pct")
@@ -471,7 +528,7 @@ _age() {
 # For the default the variable must be OMITTED, not set to ~/.claude: setting it
 # changes the Keychain namespace (same rule as the wrapper).
 cmd_login_cmd() {
-  name=${1:-default}
+  name=$(key_of "${1:-default}")
   [ "$name" = default ] || [ -d "$ACCOUNTS/$name" ] || die "no such account: $name"
   if [ "$name" = default ]; then
     printf 'claude auth login\n'
@@ -483,6 +540,7 @@ cmd_login_cmd() {
 cmd_logout() {
   name=${1:-}
   [ -n "$name" ] || die "usage: claude-account logout <name|default>"
+  name=$(key_of "$name")
   [ "$name" = default ] || [ -d "$ACCOUNTS/$name" ] || die "no such account: $name"
 
   if command -v claude >/dev/null 2>&1; then
@@ -533,6 +591,7 @@ cmd_rm() {
   [ "$had_key" = 1 ] && printf 'Keychain credentials removed (%s)\n' "$svc"
 
   n=0
+  write_label "$name"
   for f in $(overrides_naming "$name"); do rm -f "$f"; n=$((n+1)); done
   [ "$n" -gt 0 ] && printf "removed %s overrides pointing at '%s'\n" "$n" "$name"
 
@@ -562,6 +621,8 @@ cmd_rename() {
 
   # Overrides are single-token files written by the machine: rewriting them is safe.
   for f in $(overrides_naming "$old"); do printf '%s\n' "$new" > "$f"; done
+  l=$(label_of "$old")
+  if [ -n "$l" ]; then write_label "$new" "$l"; write_label "$old"; fi
 
   printf 'renamed %s → %s\n' "$old" "$new"
   printf 'WARNING: credentials were tied to the old path and have been removed.\n'
@@ -663,6 +724,7 @@ cmd_share() {
     case "$a" in --force) force=1 ;; on|off) mode=$a ;; *) name=$a ;; esac
   done
   [ -n "$name" ] || die "usage: claude-account share <name> [on|off] [--force]"
+  name=$(key_of "$name")
   case "$name" in default) die "'default' is the account the others share with" ;; esac
   case "$name" in .*|*/*) die "invalid name: $name" ;; esac
   [ -d "$ACCOUNTS/$name" ] || die "no such account: $name"
@@ -750,9 +812,38 @@ cmd_sync_json() {
   sync_json "$a"
 }
 
+# label <name|default> [<label>]: no label prints the current one, "" or --clear removes it.
+cmd_label() {
+  [ $# -ge 1 ] || die "usage: claude-account label <name|default> [<label>|--clear]"
+  name=$(key_of "$1"); shift
+  [ "$name" = default ] || [ -d "$ACCOUNTS/$name" ] || die "no such account: $name (see: claude-account list)"
+  if [ $# -eq 0 ]; then
+    printf '%s\n' "$(label_of "$name")"
+    return 0
+  fi
+  lbl=$*
+  [ "$lbl" = "--clear" ] && lbl=
+  # one line, no tabs or control characters, no edge spaces (read would drop them anyway)
+  case "$lbl" in
+    *[![:print:]]*) die "invalid label: control characters are not allowed" ;;
+  esac
+  lbl=$(printf '%s' "$lbl" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')
+  if [ -n "$lbl" ]; then
+    # a label equal to another account's key or label would make the alias ambiguous
+    if [ "$lbl" != "$name" ] && { [ "$lbl" = default ] || [ -d "$ACCOUNTS/$lbl" ]; }; then
+      die "label '$lbl' is the key of another account"
+    fi
+    other=$(key_of "$lbl")
+    [ "$other" = "$lbl" ] || [ "$other" = "$name" ] || die "label '$lbl' is already used by '$other'"
+  fi
+  write_label "$name" "$lbl" || die "cannot write $LABELS"
+  if [ -n "$lbl" ]; then printf '%s → %s\n' "$name" "$lbl"; else printf '%s → no label\n' "$name"; fi
+}
+
 cmd_use() {
   name=${1:-}
   [ -n "$name" ] || die "usage: claude-account use <name|default> [path]"
+  name=$(key_of "$name")
   [ "$name" = default ] || [ -d "$ACCOUNTS/$name" ] || die "no such account: $name (see: claude-account list)"
   d=$(abspath "${2:-$PWD}")
   mkdir -p "$OVERRIDES" || die "cannot create $OVERRIDES"
@@ -796,7 +887,7 @@ claude-account — one Claude Code account per project
 
   resolve [path]        print the config dir to use (empty = default account)
   status  [path]        account / config_dir / source / path / email / cwd
-  list                  available accounts and who is logged in to each
+  list                  available accounts (label and key) and who is logged in to each
   usage [--live] [name] usage (5h, 7 days, credit). --live asks the API
   new <name> [--share]  create the slot ~/.claude-accounts/<name>
   share <name> [on|off] [--force]
@@ -808,6 +899,8 @@ claude-account — one Claude Code account per project
   clear-cwd [path]      remove the start folder, back to the path itself
   login-cmd <name>      print the login line for that account
   logout <name>         log the account out and remove its credentials
+  label <name|default> [<label>|--clear]
+                        set, show or clear a display label; the key stays the identity
   rename <old> <new>    rename a slot (requires logging in again)
   rm <name> [--force]   delete the slot, its credentials and its overrides
 
@@ -850,6 +943,7 @@ case "$cmd" in
   clear-cwd)     cmd_clear_cwd "$@" ;;
   login-cmd)     cmd_login_cmd "$@" ;;
   logout)        cmd_logout  "$@" ;;
+  label)         cmd_label   "$@" ;;
   rename)        cmd_rename  "$@" ;;
   rm|delete)     cmd_rm      "$@" ;;
   help|-h|--help) cmd_help ;;

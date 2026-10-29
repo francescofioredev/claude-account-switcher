@@ -94,8 +94,8 @@ async function listAccounts() {
     .split('\n')
     .filter(Boolean)
     .map((line) => {
-      const [name, email, configDir, json, , , shared] = line.split('\t');
-      return { name, email: email || '', configDir, json, shared: shared === '1' };
+      const [name, email, configDir, json, , , shared, label] = line.split('\t');
+      return { name, email: email || '', configDir, json, shared: shared === '1', label: label || '' };
     });
 }
 
@@ -344,7 +344,7 @@ function card(u, current) {
   const tier = TIER_LABEL[u.tier] || u.tier || '';
   return `<div class="card${isCurrent ? ' cur' : ''}">
     <div class="hd">
-      <span class="nm">${n}</span>
+      <span class="nm">${u.label ? `${esc(u.label)} <span class="tier">${n}</span>` : n}</span>
       ${isCurrent
         ? '<span class="tag">active</span>'
         : `<button class="use" data-a="use" data-n="${n}">Use here</button>`}
@@ -843,7 +843,7 @@ async function switchAccount() {
 
   const current = state?.account;
   const items = accounts.map((a) => ({
-    label: `${a.name === current ? '$(check) ' : '      '}${a.name}`,
+    label: `${a.name === current ? '$(check) ' : '      '}${a.label ? `${a.label} (${a.name})` : a.name}`,
     description: (a.email || '⚠ never logged in') + (a.shared ? ' · shared' : ''),
     detail: a.configDir,
     account: a.name,
