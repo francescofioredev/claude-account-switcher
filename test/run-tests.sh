@@ -13,6 +13,12 @@ WRAP="$REPO/bin/claude-account-wrapper"
 T=$(mktemp -d)
 export HOME="$T/home"
 unset XDG_CONFIG_HOME
+# rm, rename and logout call these: stubs keep the suite off the real login Keychain
+mkdir -p "$T/stub"
+printf '#!/bin/sh\nexit 0\n' > "$T/stub/claude"
+printf '#!/bin/sh\nexit 1\n' > "$T/stub/security"
+chmod +x "$T/stub/claude" "$T/stub/security"
+PATH="$T/stub:$PATH"
 mkdir -p "$HOME/.claude/skills" "$HOME/.claude/agents" "$HOME/proj/alpha/sub" "$HOME/proj/beta" "$HOME/altro"
 printf 'instructions\n' > "$HOME/.claude/CLAUDE.md"
 # Claude Code's asymmetry: the default account's .claude.json sits BESIDE ~/.claude,
@@ -444,11 +450,12 @@ chk "rename carries the label" "Work account" "$($CLI label job)"
 chk "rename leaves no old line" "0" "$(grep -c '^work ' "$LBL")"
 $CLI rename job work >/dev/null 2>&1
 $CLI new gone >/dev/null 2>&1
-chk "set on a slot to be removed" "0" "$($CLI label gone Trash >/dev/null 2>&1; echo $?)"
+chk "set on a slot to be removed" "1" "$($CLI label gone Trash >/dev/null 2>&1; grep -c '^gone Trash$' "$LBL")"
 $CLI rm gone >/dev/null 2>&1
+chk "rm drops the label"   "0" "$(grep -c '^gone ' "$LBL")"
 chk "case variant of its own key allowed" "Work" "$($CLI label work Work >/dev/null 2>&1; $CLI label work)"
 $CLI label work "Work account" >/dev/null 2>&1
-chk "non-ASCII label" "Señor Työ" "$($CLI label work 'Señor Työ' >/dev/null 2>&1; $CLI label work)"
+chk "non-ASCII label" "Señor Työ" "$(export LC_ALL=C; $CLI label work 'Señor Työ' >/dev/null 2>&1; $CLI label work)"
 $CLI label work "Work account" >/dev/null 2>&1
 chk "'---' in a label refused" "1" "$($CLI label work 'a---b' >/dev/null 2>&1; echo $?)"
 chk "empty key refused"   "1" "$($CLI label '' x >/dev/null 2>&1; echo $?)"
@@ -462,7 +469,6 @@ printf 'default me@example.com\nwork Work account\n' > "$LBL"
 chk "unreadable labels file is not wiped" "1" "$(chmod 000 "$LBL"; $CLI label work Zed >/dev/null 2>&1; echo $?)"
 chmod 600 "$LBL"
 chk "labels survived"     "2" "$(wc -l < "$LBL" | tr -d ' ')"
-chk "rm drops the label"   "0" "$(grep -c '^gone ' "$LBL")"
 chk "--clear says so"      "work → no label" "$($CLI label work --clear)"
 chk "cleared label gone"   "" "$($CLI label work)"
 $CLI label default "" >/dev/null 2>&1
