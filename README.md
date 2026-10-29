@@ -102,7 +102,7 @@ tree at once — see [the three levels of precedence](#the-three-levels-of-prece
 | `new <name> [--share]` | Create the slot `~/.claude-accounts/<name>`, sharing config with `~/.claude` via symlinks. `--share` also turns on `share`. |
 | `share <name> [on\|off] [--force]` | Share sessions, plans and local MCP config with the default account. Alone, prints `shared=0` or `1`. |
 | `list` | Every account and who is logged in to each, with its label if it has one. |
-| `label <name\|default> [<label>\|--clear]` | Set, show or clear a display label, e.g. `label default me@example.com`. Shown by `list`, `status` and `usage`; the key stays the identity. Commands taking an account name also accept the label. |
+| `label <name\|default> [<label>\|--clear]` | Set, show or clear a display label, e.g. `label default me@example.com`. Shown by `list`, `status` and `usage`; the key stays the identity. `use`, `usage`, `login-cmd`, `logout` and `share` also accept the label in place of the key. |
 | `login-cmd <name>` | Print the login line for an account. Printed, not run: the OAuth flow wants a terminal of your own. |
 | `logout <name>` | Log the account out and remove its Keychain credentials. |
 | `rename <old> <new>` | Move the slot. Requires logging in again — see below. |

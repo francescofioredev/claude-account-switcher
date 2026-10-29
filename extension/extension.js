@@ -117,7 +117,7 @@ async function getUsage(live) {
     : await runCli(['usage', '--porcelain']);
   if (!out) return [];
   return out
-    .split('---')
+    .split(/^---$/m)
     .map((chunk) => parseKeyValue(chunk))
     .filter((r) => r.name);
 }

@@ -402,17 +402,17 @@ $CLI new work >/dev/null 2>&1
 printf '{"oauthAccount":{"emailAddress":"work@example.com"}}' > "$HOME/.claude-accounts/work/.claude.json"
 chk "no label by default"  "" "$($CLI label default)"
 chk "status label empty"   "" "$(field "$($CLI status "$HOME/altro")" label)"
-chk "set exits 0"          "0" "$($CLI label default francesco.fiore.dev >/dev/null 2>&1; echo $?)"
-chk "label read back"      "francesco.fiore.dev" "$($CLI label default)"
-chk "stored as key label"  "default francesco.fiore.dev" "$(cat "$LBL")"
+chk "set exits 0"          "0" "$($CLI label default me@example.com >/dev/null 2>&1; echo $?)"
+chk "label read back"      "me@example.com" "$($CLI label default)"
+chk "stored as key label"  "default me@example.com" "$(cat "$LBL")"
 $CLI label work "Work account" >/dev/null 2>&1
 chk "label with spaces"    "Work account" "$($CLI label work)"
-chk "list shows label and key" "1" "$($CLI list | grep -c '^francesco.fiore.dev (default) ')"
+chk "list shows label and key" "1" "$($CLI list | grep -c '^me@example.com (default) ')"
 chk "list shows spaced label"  "1" "$($CLI list | grep -c '^Work account (work) ')"
 chk "list columns stay aligned" "1" "$($CLI list | awk '{print index($0,$NF)}' | sort -u | wc -l | tr -d ' ')"
 s=$($CLI status "$HOME/altro")
 chk "status account is still the key" "default" "$(field "$s" account)"
-chk "status label"         "francesco.fiore.dev" "$(field "$s" label)"
+chk "status label"         "me@example.com" "$(field "$s" label)"
 chk "status keeps its other keys" "default" "$(field "$s" source)"
 $CLI use work "$HOME/proj/alpha" >/dev/null
 chk "resolve is still a path" "$HOME/.claude-accounts/work" "$($CLI resolve "$HOME/proj/alpha")"
@@ -421,22 +421,22 @@ l=$($CLI list --porcelain | head -1)
 chk "porcelain 8 columns"  "8" "$(printf '%s' "$l" | awk -F'\t' '{print NF}')"
 chk "porcelain column 1 is the key" "default" "$(printf '%s' "$l" | cut -f1)"
 chk "porcelain column 7 unchanged"  "0" "$(printf '%s' "$l" | cut -f7)"
-chk "porcelain label last" "francesco.fiore.dev" "$(printf '%s' "$l" | cut -f8)"
+chk "porcelain label last" "me@example.com" "$(printf '%s' "$l" | cut -f8)"
 $CLI label work --clear >/dev/null
 chk "porcelain no label: empty column kept" "8" "$($CLI list --porcelain | grep '^work	' | awk -F'\t' '{print NF}')"
 $CLI label work "Work account" >/dev/null
 u=$($CLI usage --porcelain default)
 chk "usage name stays the key" "default" "$(field "$u" name)"
-chk "usage label"          "francesco.fiore.dev" "$(field "$u" label)"
+chk "usage label"          "me@example.com" "$(field "$u" label)"
 chk "usage email unchanged" "default@example.com" "$(field "$u" email)"
-chk "usage by label"       "default" "$(field "$($CLI usage --porcelain francesco.fiore.dev)" name)"
+chk "usage by label"       "default" "$(field "$($CLI usage --porcelain me@example.com)" name)"
 chk "login-cmd by label"   "CLAUDE_CONFIG_DIR=$HOME/.claude-accounts/work claude auth login" "$($CLI login-cmd 'Work account')"
 chk "use by label pins the key" "work" "$($CLI use 'Work account' "$HOME/proj/beta" >/dev/null; field "$($CLI status "$HOME/proj/beta")" account)"
 $CLI clear "$HOME/proj/beta" >/dev/null
 chk "unknown name still fails" "1" "$($CLI usage nobody >/dev/null 2>&1; echo $?)"
 chk "label of a missing account fails" "1" "$($CLI label ghost x >/dev/null 2>&1; echo $?)"
 chk "label equal to another key refused" "1" "$($CLI label work default >/dev/null 2>&1; echo $?)"
-chk "label equal to another label refused" "1" "$($CLI label work francesco.fiore.dev >/dev/null 2>&1; echo $?)"
+chk "label equal to another label refused" "1" "$($CLI label work me@example.com >/dev/null 2>&1; echo $?)"
 chk "tab in a label refused" "1" "$($CLI label work "a	b" >/dev/null 2>&1; echo $?)"
 chk "failed set leaves the label" "Work account" "$($CLI label work)"
 $CLI rename work job >/dev/null 2>&1
@@ -444,8 +444,24 @@ chk "rename carries the label" "Work account" "$($CLI label job)"
 chk "rename leaves no old line" "0" "$(grep -c '^work ' "$LBL")"
 $CLI rename job work >/dev/null 2>&1
 $CLI new gone >/dev/null 2>&1
-$CLI label gone Gone >/dev/null 2>&1
+chk "set on a slot to be removed" "0" "$($CLI label gone Trash >/dev/null 2>&1; echo $?)"
 $CLI rm gone >/dev/null 2>&1
+chk "case variant of its own key allowed" "Work" "$($CLI label work Work >/dev/null 2>&1; $CLI label work)"
+$CLI label work "Work account" >/dev/null 2>&1
+chk "non-ASCII label" "Señor Työ" "$($CLI label work 'Señor Työ' >/dev/null 2>&1; $CLI label work)"
+$CLI label work "Work account" >/dev/null 2>&1
+chk "'---' in a label refused" "1" "$($CLI label work 'a---b' >/dev/null 2>&1; echo $?)"
+chk "empty key refused"   "1" "$($CLI label '' x >/dev/null 2>&1; echo $?)"
+chk "dot key refused"     "1" "$($CLI label .. x >/dev/null 2>&1; echo $?)"
+chk "alias in share"      "shared=0" "$($CLI share 'Work account')"
+chk "alias in logout"     "logged out work" "$($CLI logout 'Work account' | head -1)"
+chk "alias in label"      "Work account" "$($CLI label 'Work account')"
+chk "usage porcelain label, slot" "Work account" "$(field "$($CLI usage --porcelain work)" label)"
+chk "last line without newline is read" "Late" "$(printf 'default x\nwork Late' > "$LBL"; $CLI label work)"
+printf 'default me@example.com\nwork Work account\n' > "$LBL"
+chk "unreadable labels file is not wiped" "1" "$(chmod 000 "$LBL"; $CLI label work Zed >/dev/null 2>&1; echo $?)"
+chmod 600 "$LBL"
+chk "labels survived"     "2" "$(wc -l < "$LBL" | tr -d ' ')"
 chk "rm drops the label"   "0" "$(grep -c '^gone ' "$LBL")"
 chk "--clear says so"      "work → no label" "$($CLI label work --clear)"
 chk "cleared label gone"   "" "$($CLI label work)"

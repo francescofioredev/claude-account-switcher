@@ -158,7 +158,7 @@ keychain_service_of() {
 # label may hold spaces. Display only: the key stays the identity everywhere.
 label_of() {
   [ -f "$LABELS" ] || return 0
-  while read -r k l; do
+  while read -r k l || [ -n "$k" ]; do
     [ "$k" = "$1" ] && { printf '%s' "$l"; return 0; }
   done < "$LABELS"
   return 0
@@ -167,14 +167,17 @@ label_of() {
 # The key for a name the user typed: a key wins, else a label naming one account.
 # Prints it as-is when nothing matches so the caller's own check reports it.
 key_of() {
-  if [ "$1" = default ] || [ -d "$ACCOUNTS/$1" ]; then printf '%s' "$1"; return 0; fi
+  if is_key "$1"; then printf '%s' "$1"; return 0; fi
   if [ -f "$LABELS" ]; then
-    while read -r k l; do
+    while read -r k l || [ -n "$k" ]; do
       [ -n "$l" ] && [ "$l" = "$1" ] && { printf '%s' "$k"; return 0; }
     done < "$LABELS"
   fi
   printf '%s' "$1"
 }
+
+# Exact match: -d alone would also match "Work" for "work" on a case-insensitive disk.
+is_key() { [ -n "${1:-}" ] && _names | grep -qxF -- "$1"; }
 
 # "label (key)" when labelled, else the key.
 shown_name() {
@@ -187,9 +190,10 @@ write_label() {
   mkdir -p "$CONF" || return 1
   tmp=$(mktemp "$CONF/labels.XXXXXX") || return 1
   if [ -f "$LABELS" ]; then
-    while read -r k l; do
-      [ -n "$k" ] && [ "$k" != "$1" ] && printf '%s %s\n' "$k" "$l"
-    done < "$LABELS" > "$tmp"
+    [ -r "$LABELS" ] || { rm -f "$tmp"; return 1; }
+    while read -r k l || [ -n "$k" ]; do
+      if [ -n "$k" ] && [ "$k" != "$1" ]; then printf '%s %s\n' "$k" "$l"; fi
+    done < "$LABELS" > "$tmp" || { rm -f "$tmp"; return 1; }
   fi
   [ -n "${2:-}" ] && printf '%s %s\n' "$1" "$2" >> "$tmp"
   if [ -s "$tmp" ]; then mv "$tmp" "$LABELS"; else rm -f "$tmp" "$LABELS"; fi
@@ -816,7 +820,8 @@ cmd_sync_json() {
 cmd_label() {
   [ $# -ge 1 ] || die "usage: claude-account label <name|default> [<label>|--clear]"
   name=$(key_of "$1"); shift
-  [ "$name" = default ] || [ -d "$ACCOUNTS/$name" ] || die "no such account: $name (see: claude-account list)"
+  is_key "$name" || die "no such account: $name (see: claude-account list)"
+  case "$name" in *[[:space:]]*) die "labels need an account key without spaces: $name" ;; esac
   if [ $# -eq 0 ]; then
     printf '%s\n' "$(label_of "$name")"
     return 0
@@ -825,12 +830,13 @@ cmd_label() {
   [ "$lbl" = "--clear" ] && lbl=
   # one line, no tabs or control characters, no edge spaces (read would drop them anyway)
   case "$lbl" in
-    *[![:print:]]*) die "invalid label: control characters are not allowed" ;;
+    *[[:cntrl:]]*) die "invalid label: control characters are not allowed" ;;
+    *---*) die "invalid label: '---' is not allowed" ;;
   esac
   lbl=$(printf '%s' "$lbl" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')
   if [ -n "$lbl" ]; then
     # a label equal to another account's key or label would make the alias ambiguous
-    if [ "$lbl" != "$name" ] && { [ "$lbl" = default ] || [ -d "$ACCOUNTS/$lbl" ]; }; then
+    if [ "$lbl" != "$name" ] && is_key "$lbl"; then
       die "label '$lbl' is the key of another account"
     fi
     other=$(key_of "$lbl")
