@@ -5,6 +5,21 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this
 project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- `label <name|default> [<label>|--clear]`: a display label for an account, stored in
+  `~/.config/claude-account/labels`. The key stays the identity (`default` stays `default`
+  for pins, session names and `resolve`); `list`, `status`, `usage` and the extension show the
+  label next to it. `use`, `usage`, `login-cmd`, `logout`, `share` and `label` accept the label
+  in place of the key. `rename` carries it over and `rm` drops it. `new` and `rename` refuse a name that is already a label.
+
+### Changed
+
+- `list --porcelain` has an eighth column, `label` (empty when unset); `status` and
+  `usage --porcelain` print `label=`. Existing columns and keys are unchanged.
+
 ## [0.4.0] — 2026-10-16
 
 ### Added
